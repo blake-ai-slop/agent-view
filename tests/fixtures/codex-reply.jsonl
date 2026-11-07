@@ -1,0 +1,4 @@
+{"id":1,"result":{"userAgent":"codex/0"}}
+{"method":"remoteControl/status/changed","params":{}}
+{"method":"account/updated","params":{"authMode":"chatgpt"}}
+{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":2,"windowDurationMins":10080,"resetsAt":1794624494},"secondary":{"usedPercent":41.5,"windowDurationMins":300,"resetsAt":1794061534}}}}

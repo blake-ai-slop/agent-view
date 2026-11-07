@@ -1,0 +1,17 @@
+{
+  "numStartups": 12,
+  "userID": "0000000000000000000000000000000000000000000000000000000000000000",
+  "oauthAccount": { "accountUuid": "00000000-0000-0000-0000-000000000000", "emailAddress": "user@example.com" },
+  "projects": { "C:/x": { "allowedTools": [], "note": "has \"cachedUsageUtilization\" in a string { [" } },
+  "cachedUsageUtilization": {
+    "fetchedAtMs": 1794045921071,
+    "accountUuid": "00000000-0000-0000-0000-000000000000",
+    "utilization": {
+      "five_hour": { "utilization": 5, "resets_at": "2026-11-07T19:40:00.449382+07:00", "limit_dollars": null },
+      "seven_day": { "utilization": 0.6, "resets_at": "2026-11-14T11:00:00.449402+07:00", "limit_dollars": null },
+      "seven_day_opus": null,
+      "limits": [ { "kind": "session", "percent": 5, "resets_at": "2026-11-07T19:40:00.449382+07:00" } ]
+    }
+  },
+  "afterKey": "x"
+}
