@@ -66,7 +66,7 @@ Describe 'Run state' {
         Resolve-AgentViewRunState $null $false | Should Be 'stopped'
     }
     It 'install, uninstall and CLI share one running-detection function' {
-        foreach ($f in @('install.ps1','uninstall.ps1')) {
+        foreach ($f in @('install.ps1','installer.ps1','uninstall.ps1')) {
             $text = Get-Content "$PSScriptRoot/../$f" -Raw
             $text | Should Not Match 'Win32_Process'
         }

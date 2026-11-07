@@ -1,4 +1,4 @@
-﻿# Lệnh `agentview` + hàm dùng chung cho install.ps1/uninstall.ps1 (đường dẫn, phát hiện đang chạy, PATH người dùng, shim, tự chạy).
+﻿# Lệnh `agentview` + hàm dùng chung cho installer.ps1/uninstall.ps1 (đường dẫn, phát hiện đang chạy, PATH người dùng, shim, tự chạy).
 # Dot-source không side effect. Chạy được trên Windows PowerShell 5.1 và pwsh 7; app luôn chạy bằng powershell.exe.
 # Biến môi trường ẩn cho thử nghiệm: AGENT_VIEW_STARTUP_DIR (thư mục Startup), AGENT_VIEW_USER_PATH_FILE (PATH người dùng giả).
 $script:AgentViewVersion = '0.0.0'  # dự phòng khi thiếu Version.ps1 (vd. bản sao tạm lúc gỡ); nguồn thật: src/Version.ps1
@@ -315,14 +315,15 @@ function Invoke-AgentViewChild([string]$ArgumentText) {
     return [int]$p.ExitCode
 }
 function Invoke-AgentViewUpdate($Paths) {
+    # Gọi thẳng installer.ps1 (bộ cài thật) bằng -File trong powershell.exe; install.ps1 chỉ là bootstrap cho irm | iex.
     $source = $env:AGENT_VIEW_SOURCE; if ([string]::IsNullOrWhiteSpace($source)) { $source = $script:AgentViewDefaultSource }
     $tempDir = Join-Path ([IO.Path]::GetTempPath()) ('agent-view-update-' + [guid]::NewGuid().ToString('N'))
     try {
-        if (Test-Path -LiteralPath $source -PathType Container) { $installer = Join-Path $source 'install.ps1' }
+        if (Test-Path -LiteralPath $source -PathType Container) { $installer = Join-Path $source 'installer.ps1' }
         else {
-            [void][IO.Directory]::CreateDirectory($tempDir); $installer = Join-Path $tempDir 'install.ps1'
+            [void][IO.Directory]::CreateDirectory($tempDir); $installer = Join-Path $tempDir 'installer.ps1'
             Write-Host ('Tải trình cài từ ' + $source + ' …') -ForegroundColor DarkGray
-            try { Invoke-WebRequest -UseBasicParsing -Uri ($source.TrimEnd('/') + '/install.ps1') -OutFile $installer -ErrorAction Stop }
+            try { Invoke-WebRequest -UseBasicParsing -Uri ($source.TrimEnd('/') + '/installer.ps1') -OutFile $installer -ErrorAction Stop }
             catch { Write-AgentViewStep fail 'Không tải được trình cài.' ($_.Exception.Message + ' — kiểm tra mạng rồi thử lại: agentview update'); return 1 }
         }
         if (-not (Test-Path -LiteralPath $installer)) { Write-AgentViewStep fail ('Không thấy ' + $installer); return 1 }

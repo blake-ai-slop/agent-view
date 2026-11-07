@@ -18,13 +18,13 @@ The tray icon shows the lowest remaining percentage across your 5-hour and weekl
 
 ## Quick start
 
-Run in Windows PowerShell:
+Run in Windows PowerShell or PowerShell 7:
 
 ```powershell
 irm https://raw.githubusercontent.com/blake-ai-slop/agent-view/main/install.ps1 | iex
 ```
 
-1. The installer asks whether to start at sign-in, enable the floating widget, and start now.
+1. A small bootstrap (`install.ps1`) downloads the installer (`installer.ps1`) and runs it in Windows PowerShell. The installer asks whether to start at sign-in, enable the floating widget, and start now.
 2. Files go into `%LOCALAPPDATA%\agent-view`, and the `agentview` command is added to your user PATH.
 3. The app appears in the tray, and the installer prints your current remaining quota.
 
@@ -84,7 +84,7 @@ Or run the downloaded script as a script block with switches:
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/blake-ai-slop/agent-view/main/install.ps1))) -Yes -Widget
 ```
 
-From a downloaded copy or a checkout:
+From a checkout (it uses the `installer.ps1` next to it; a lone `install.ps1` downloads it):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoAutostart

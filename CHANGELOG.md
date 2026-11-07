@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.1
+
+### Fixed
+
+- One-line install via `irm | iex` failed with `param: The term 'param' is not recognized` because `install.ps1` started with a UTF-8 BOM. `install.ps1` is now a plain-ASCII bootstrap that downloads the real installer (`installer.ps1`) and runs it in Windows PowerShell, from both Windows PowerShell 5.1 and PowerShell 7. `agentview update` runs `installer.ps1` directly.
+
 ## v0.1.0
 
 ### Added

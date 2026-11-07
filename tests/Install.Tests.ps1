@@ -1,5 +1,5 @@
 ﻿. "$PSScriptRoot/../src/Cli.ps1"
-. "$PSScriptRoot/../install.ps1"
+. "$PSScriptRoot/../installer.ps1"
 . "$PSScriptRoot/../uninstall.ps1"
 Describe 'Install and uninstall paths' {
     It 'uses only the supplied application and Startup roots' {
@@ -67,7 +67,7 @@ Describe 'Install options' {
 
 Describe 'Install payload and staging' {
     It 'includes all modules including Cli.ps1 and rejects missing local files' {
-        $text=Get-Content "$PSScriptRoot/../install.ps1" -Raw
+        $text=Get-Content "$PSScriptRoot/../installer.ps1" -Raw -Encoding UTF8
         foreach ($name in @('Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','Version.ps1','Cli.ps1')) { $text | Should Match ([regex]::Escape("'"+$name+"'")) }
         $text | Should Match 'Thiếu file cài đặt'
     }

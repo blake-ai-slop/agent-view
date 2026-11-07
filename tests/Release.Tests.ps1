@@ -9,7 +9,7 @@ Describe 'Public release export' {
         $target = Join-Path $caseRoot 'public'
         $null = New-Item -ItemType Directory -Force -Path $source,$target
         foreach ($relative in @('src/main.ps1','tests/example.Tests.ps1','tools/parse-check.ps1',
-            'install.ps1','uninstall.ps1','README.md','CHANGELOG.md','LICENSE','tools/public.gitignore',
+            'install.ps1','installer.ps1','uninstall.ps1','README.md','CHANGELOG.md','LICENSE','tools/public.gitignore',
             'design/reference.html','tools/private.ps1','notes/private.txt')) {
             $path = Join-Path $source $relative
             $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path)
@@ -25,7 +25,7 @@ Describe 'Public release export' {
     }
     It 'selects only the allowed paths and substitutes the owner in memory' {
         $files = @(Get-ReleaseFiles $source 'sample-owner')
-        $files.Count | Should Be 10
+        $files.Count | Should Be 11
         @($files | Where-Object { $_.Path -eq '.gitignore' }).Count | Should Be 1
         @($files | Where-Object { $_.Path -match 'design|notes|private|public.gitignore' }).Count | Should Be 0
         ($files | Where-Object { $_.Path -eq 'README.md' }).Content | Should Be 'safe sample-owner'
@@ -82,17 +82,31 @@ Describe 'Public release export' {
         $exception.Reason = ''
         @(Test-ReleaseContent @($file) @($exception)).Count | Should Be 1
         foreach ($known in Get-ReleaseExceptions) {
-            $known.File | Should Match '^(tests/fixtures/|install\.ps1$)'
+            $known.File | Should Match '^(tests/fixtures/|installer\.ps1$)'
             [string]::IsNullOrWhiteSpace($known.Reason) | Should Be $false
         }
     }
     It 'allows only the fixed toast namespace in the installer' {
-        $file = [pscustomobject]@{ Path='install.ps1'; Content=('1AC14E77' + '-02E7-4E5D-B744-' + '2EB1AE5198B7') }
+        $file = [pscustomobject]@{ Path='installer.ps1'; Content=('1AC14E77' + '-02E7-4E5D-B744-' + '2EB1AE5198B7') }
         @(Test-ReleaseContent @($file) (Get-ReleaseExceptions)).Count | Should Be 0
         $file.Path = 'src/Quota.ps1'
         @(Test-ReleaseContent @($file) (Get-ReleaseExceptions)).Count | Should Be 1
-        $file.Path = 'install.ps1'; $file.Content = '11111111' + '-1111-1111-1111-' + '111111111111'
+        $file.Path = 'installer.ps1'; $file.Content = '11111111' + '-1111-1111-1111-' + '111111111111'
         @(Test-ReleaseContent @($file) (Get-ReleaseExceptions)).Count | Should Be 1
+    }
+    It 'requires install.ps1 to be ASCII without a BOM or a top-level param block' {
+        $ok = [Text.Encoding]::ASCII.GetBytes("`$x = & { param(`$a) `$a } 1`r`n")
+        @(Test-ReleaseBootstrap $ok).Count | Should Be 0
+        (Test-ReleaseBootstrap ([byte[]](@(239,187,191) + $ok)) | Out-String) | Should Match 'has a UTF-8 BOM'
+        (Test-ReleaseBootstrap ([Text.Encoding]::UTF8.GetBytes("# c" + [char]0xF3 + "`r`n")) | Out-String) | Should Match 'non-ASCII byte at offset 3'
+        (Test-ReleaseBootstrap ([Text.Encoding]::ASCII.GetBytes("param([switch]`$Yes)`r`n`$Yes")) | Out-String) | Should Match 'top-level param'
+        $path = Join-Path $source 'install.ps1'
+        [IO.File]::WriteAllBytes($path, [byte[]](@(239,187,191) + [Text.Encoding]::ASCII.GetBytes('safe')))
+        { Publish-Release $source '0.1.0' $target 'sample-owner' -DryRun } | Should Throw 'has a UTF-8 BOM'
+        [IO.File]::WriteAllText($path, "param([string]`$Source)`r`n")
+        { Publish-Release $source '0.1.0' $target 'sample-owner' -DryRun } | Should Throw 'top-level param'
+        Remove-Item -LiteralPath $path
+        { Publish-Release $source '0.1.0' $target 'sample-owner' -DryRun } | Should Throw 'Missing release file: install.ps1'
     }
     It 'rejects a version that differs from src/Version.ps1 or lacks a changelog section' {
         { Publish-Release $source '0.2.0' $target '' -DryRun } | Should Throw 'does not match src/Version.ps1'
