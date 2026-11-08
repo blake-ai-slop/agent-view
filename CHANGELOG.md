@@ -1,4 +1,19 @@
-# Changelog
+﻿# Changelog
+
+## v0.2.1
+
+### Added
+
+- Update check from the tray menu: **Check for updates** asks GitHub Releases for the latest version in the background and reports the result in a notification. When a newer version is known, the item becomes **Update to vX**.
+- Optional automatic update check: shortly after the app starts and then at most once a day, with one notification per new version. Clicking the notification starts the update.
+- A small version badge in the popup header when a newer version is available; click it to update.
+- `agentview update --check` to check for a newer version from the terminal.
+- A setting to turn off automatic update checks. Agent-view never updates without asking: updates run only when you click the menu item, notification, or badge, or run `agentview update`.
+
+### Changed
+
+- Notifications now use an agent-view styled toast (the same dark Bezel look as the popup and widget) in the bottom-right corner instead of a tray balloon labelled "Windows PowerShell". It never takes focus, hides after 8 seconds (hover to keep it), opens the popup when clicked, and combines several alerts into one toast. During full-screen apps, presentations, or quiet hours, the app falls back to a standard Windows notification so it lands in Notification Center.
+- "Full again" notifications no longer repeat the provider name: the title is "Claude Code: full again" and the text is the window, for example "5-hour limit · 100% left".
 
 ## v0.2.0
 

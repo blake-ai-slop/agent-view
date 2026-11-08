@@ -21,6 +21,8 @@ function New-IntRow([string]$Provider, $Five, $Week, [datetime]$FiveReset, [date
 }
 function Reset-IntegrateState {
     try { Close-AgentViewPopup -Force } catch { }
+    try { Close-AgentViewToast -Force } catch { }
+    [AppDomain]::CurrentDomain.SetData('agent-view.toast', $null)
     try { Hide-AgentViewWidget } catch { }
     [AppDomain]::CurrentDomain.SetData('agent-view.popup', $null)
     [AppDomain]::CurrentDomain.SetData('agent-view.widget', $null)
@@ -81,6 +83,7 @@ Describe 'Integration: refresh → history, forecast, notifications, hidden prov
     }
 
     It 'shows exactly one merged balloon when thresholds are crossed and does not repeat' {
+        Mock Test-AgentViewUserBusy { $true }   # bận ⇒ balloon NotifyIcon thay toast
         $tray = New-FakeTray
         $now = Get-Date
         $fiveReset = $now.AddHours(2); $weekReset = $now.AddDays(3)
@@ -103,6 +106,25 @@ Describe 'Integration: refresh → history, forecast, notifications, hidden prov
         $tray.Notify.Balloons.Count | Should Be 2
         $tray.Notify.Balloons[1].Icon | Should Be ([Windows.Forms.ToolTipIcon]::Warning)
         $tray.Notify.Balloons[1].Title | Should Be 'Claude Code: 8% left'
+    }
+
+    It 'shows one real agent-view toast (not a balloon) when the user is not busy' {
+        Mock Test-AgentViewUserBusy { $false }
+        $tray = New-FakeTray
+        $opened = @{ n = 0 }
+        $tray.OpenToastPopup = { $opened.n++ }.GetNewClosure()
+        $now = Get-Date
+        $fiveReset = $now.AddHours(2); $weekReset = $now.AddDays(3)
+        Complete-AgentViewRefresh $tray @((New-IntRow 'claude' 20 10 $fiveReset $weekReset), (New-IntRow 'codex' 20 10 $fiveReset $weekReset)) -Now $now.AddMinutes(-5)
+        Complete-AgentViewRefresh $tray @((New-IntRow 'claude' 75 10 $fiveReset $weekReset), (New-IntRow 'codex' 92 10 $fiveReset $weekReset)) -Now $now.AddMinutes(-4)
+        $tray.Notify.Balloons.Count | Should Be 0
+        Test-AgentViewToastOpen | Should Be $true
+        $st = Get-AgentViewToastState
+        $st.Ui.Rows.Children.Count | Should Be 2
+        $st.Model.Warning | Should Be $true
+        @($st.Model.Rows | ForEach-Object { $_.Title }) -join '|' | Should Be 'Claude Code: 25% left|Codex: 8% left'
+        & $st.OnClick
+        $opened.n | Should Be 1
     }
 
     It 'keeps hidden providers out of icon, tooltip, popup and notifications but records their history' {
@@ -205,8 +227,9 @@ Describe 'Integration: settings apply and refresh interval' {
             Show-AgentViewSettingsWindow -OnSaved $tray.Apply
             $ui = (Get-AgentViewSettingsWindowState).Ui
             $ui.LangVi.IsChecked = $true; $ui.Refresh60.IsChecked = $true; $ui.Codex.IsChecked = $false; $ui.WidgetEnabled.IsChecked = $false
-            # SettingsWindow.ps1 (w2) phát thêm 1 giá trị trước $true; chỉ kiểm giá trị cuối.
-            @(Save-AgentViewSettingsWindow)[-1] | Should Be $true
+            $savedResult = @(Save-AgentViewSettingsWindow)
+            $savedResult.Count | Should Be 1
+            $savedResult[0] | Should Be $true
             $tray.Menu.Refresh.Text | Should Be 'Làm mới'
             $tray.Menu.Settings.Text | Should Be 'Cài đặt…'
             $tray.State.RefreshSeconds | Should Be 60

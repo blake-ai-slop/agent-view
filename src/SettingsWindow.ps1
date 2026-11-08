@@ -7,7 +7,7 @@ Register-AgentViewStrings -Module 'settings' -Strings @{
         title='Settings'; language='Language'; auto='Automatic'; english='English'; vietnamese=([Globalization.CultureInfo]::GetCultureInfo('vi').NativeName)
         refresh='Refresh every'; minute1='1 minute'; minute2='2 minutes'; minute5='5 minutes'
         notifications='Quota notifications'; enabled='Enable notifications'; threshold1='First threshold (%)'; threshold2='Second threshold (%)'
-        reset='Notify when quota refills'; desktop='Desktop'; widget='Show floating widget'; autostart='Start at sign-in'
+        update='Check for updates automatically'; reset='Notify when quota refills'; desktop='Desktop'; widget='Show floating widget'; autostart='Start at sign-in'
         providers='Visible providers'; claude='Claude Code'; codex='Codex'; save='Save'; cancel='Cancel'
         thresholds_error='Enter whole numbers from 5 to 90. The first threshold must be higher than the second.'
         providers_error='Keep at least one provider visible.'; save_error='Could not save settings. Please try again.'
@@ -16,7 +16,7 @@ Register-AgentViewStrings -Module 'settings' -Strings @{
         title='Cài đặt'; language='Ngôn ngữ'; auto='Tự động'; english='English'; vietnamese='Tiếng Việt'
         refresh='Làm mới mỗi'; minute1='1 phút'; minute2='2 phút'; minute5='5 phút'
         notifications='Thông báo quota'; enabled='Bật thông báo'; threshold1='Ngưỡng 1 (%)'; threshold2='Ngưỡng 2 (%)'
-        reset='Báo khi quota đầy lại'; desktop='Màn hình'; widget='Hiện widget nổi'; autostart='Tự chạy khi đăng nhập'
+        update='Tự kiểm tra cập nhật'; reset='Báo khi quota đầy lại'; desktop='Màn hình'; widget='Hiện widget nổi'; autostart='Tự chạy khi đăng nhập'
         providers='Provider hiển thị'; claude='Claude Code'; codex='Codex'; save='Lưu'; cancel='Hủy'
         thresholds_error='Nhập số nguyên từ 5 đến 90. Ngưỡng 1 phải lớn hơn ngưỡng 2.'
         providers_error='Cần hiển thị ít nhất một provider.'; save_error='Không lưu được cài đặt. Vui lòng thử lại.'
@@ -92,6 +92,7 @@ function Get-AgentViewSettingsWindowXaml {
     <TextBlock Text="@threshold2@" Grid.Column="2"/><TextBox x:Name="Threshold2" Grid.Column="3"/>
    </Grid>
    <CheckBox x:Name="NotifyReset" Content="@reset@"/>
+   <CheckBox x:Name="UpdateCheck" Content="@update@"/>
    <TextBlock Text="@desktop@" Style="{StaticResource Heading}"/>
    <CheckBox x:Name="WidgetEnabled" Content="@widget@"/>
    <CheckBox x:Name="Autostart" Content="@autostart@"/>
@@ -123,6 +124,7 @@ function Save-AgentViewSettingsWindow {
     $s=Get-AgentViewSettings
     $s.Language=if ($ui.LangVi.IsChecked) {'vi'} elseif ($ui.LangEn.IsChecked) {'en'} else {'auto'}
     $s.RefreshSeconds=if ($ui.Refresh60.IsChecked) {60} elseif ($ui.Refresh300.IsChecked) {300} else {120}
+    $s.UpdateCheck=[bool]$ui.UpdateCheck.IsChecked
     $s.NotifyEnabled=[bool]$ui.NotifyEnabled.IsChecked; $s.NotifyReset=[bool]$ui.NotifyReset.IsChecked
     $s.NotifyThresholds=@($hi,$lo); $s.WidgetEnabled=[bool]$ui.WidgetEnabled.IsChecked
     $s.HiddenProviders=@(if (-not $ui.Claude.IsChecked) {'claude'}; if (-not $ui.Codex.IsChecked) {'codex'})
@@ -146,10 +148,11 @@ function Show-AgentViewSettingsWindow {
     Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase,WindowsFormsIntegration
     $w=[Windows.Markup.XamlReader]::Parse((Get-AgentViewSettingsWindowXaml))
     $st.Window=$w; $st.OnSaved=$OnSaved
-    foreach ($name in @('Shell','TitleBar','LangAuto','LangEn','LangVi','Refresh60','Refresh120','Refresh300','NotifyEnabled','Threshold1','Threshold2','NotifyReset','WidgetEnabled','Autostart','Claude','Codex','Error','Cancel','Save')) { $st.Ui[$name]=$w.FindName($name) }
+    foreach ($name in @('Shell','TitleBar','LangAuto','LangEn','LangVi','Refresh60','Refresh120','Refresh300','NotifyEnabled','Threshold1','Threshold2','NotifyReset','UpdateCheck','WidgetEnabled','Autostart','Claude','Codex','Error','Cancel','Save')) { $st.Ui[$name]=$w.FindName($name) }
     $s=Get-AgentViewSettings; $ui=$st.Ui
     $ui.LangAuto.IsChecked=($s.Language -eq 'auto'); $ui.LangEn.IsChecked=($s.Language -eq 'en'); $ui.LangVi.IsChecked=($s.Language -eq 'vi')
     $ui['Refresh'+$s.RefreshSeconds].IsChecked=$true
+    $ui.UpdateCheck.IsChecked=$s.UpdateCheck
     $ui.NotifyEnabled.IsChecked=$s.NotifyEnabled; $ui.NotifyReset.IsChecked=$s.NotifyReset
     $ui.Threshold1.Text=[string]$s.NotifyThresholds[0]; $ui.Threshold2.Text=[string]$s.NotifyThresholds[1]
     $ui.WidgetEnabled.IsChecked=$s.WidgetEnabled; $ui.Autostart.IsChecked=Test-AgentViewAutostart (Get-AgentViewPaths)
@@ -175,6 +178,6 @@ function Close-AgentViewSettingsWindow {
     $st.Ui.TitleBar.Remove_MouseLeftButtonDown($st.DragHandler)
     $w.Remove_PreviewKeyDown($st.KeyHandler); $w.Remove_Closed($st.ClosedHandler)
     $w.Close()
-    $w.Dispatcher.Invoke([Windows.Threading.DispatcherPriority]::ContextIdle,[Action]{})
+    [void]$w.Dispatcher.Invoke([Windows.Threading.DispatcherPriority]::ContextIdle,[Action]{})
     [AppDomain]::CurrentDomain.SetData('agent-view.settings-window',$null)
 }

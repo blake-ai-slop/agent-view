@@ -1,8 +1,9 @@
 ﻿function Get-AgentViewSettings([string]$Path = (Join-Path $env:LOCALAPPDATA 'agent-view/settings.json')) {
-    $s = [pscustomobject]@{WidgetEnabled=$false;WidgetEdge='right';WidgetOffset=$null;WidgetScreen=$null;Language='auto';RefreshSeconds=120;NotifyEnabled=$true;NotifyThresholds=@(30,10);NotifyReset=$true;HiddenProviders=@()}
+    $s = [pscustomobject]@{WidgetEnabled=$false;WidgetEdge='right';WidgetOffset=$null;WidgetScreen=$null;Language='auto';RefreshSeconds=120;NotifyEnabled=$true;NotifyThresholds=@(30,10);NotifyReset=$true;UpdateCheck=$true;HiddenProviders=@()}
     try {
         $v = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         if (($v.RefreshSeconds -is [int] -or $v.RefreshSeconds -is [long]) -and $v.RefreshSeconds -in @(60,120,300)) { $s.RefreshSeconds=[int]$v.RefreshSeconds }
+        if ($v.UpdateCheck -is [bool]) { $s.UpdateCheck=$v.UpdateCheck }
         if ($v.NotifyEnabled -is [bool]) { $s.NotifyEnabled=$v.NotifyEnabled }
         if ($v.NotifyReset -is [bool]) { $s.NotifyReset=$v.NotifyReset }
         if ($v.NotifyThresholds -is [array] -and $v.NotifyThresholds.Count -eq 2) {

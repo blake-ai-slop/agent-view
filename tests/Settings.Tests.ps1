@@ -25,6 +25,17 @@ Describe 'Widget settings' {
 }
 
 Describe 'Preferences schema' {
+    It 'defaults update checking safely and preserves a disabled choice' {
+        $p=Join-Path $TestDrive 'updates.json'
+        (Get-AgentViewSettings $p).UpdateCheck | Should Be $true
+        foreach ($value in @('"false"','0','null','[]')) {
+            Set-Content $p ('{"UpdateCheck":'+$value+'}')
+            (Get-AgentViewSettings $p).UpdateCheck | Should Be $true
+        }
+        $s=Get-AgentViewSettings $p; $s.UpdateCheck=$false
+        Save-AgentViewSettings $s $p
+        (Get-AgentViewSettings $p).UpdateCheck | Should Be $false
+    }
     It 'uses safe defaults for missing or mistyped fields' {
         $p=Join-Path $TestDrive 'preferences.json'
         Set-Content $p '{"RefreshSeconds":"60","NotifyEnabled":"false","NotifyReset":1,"NotifyThresholds":[10,30],"HiddenProviders":["claude","codex"]}'

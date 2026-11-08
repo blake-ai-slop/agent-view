@@ -129,7 +129,7 @@ Register-AgentViewStrings -Module 'cli' -Strings @{
 $script:AgentViewVersion = '0.0.0'  # dự phòng khi thiếu Version.ps1 (vd. bản sao tạm lúc gỡ); nguồn thật: src/Version.ps1
 $script:AgentViewDefaultSource = 'https://raw.githubusercontent.com/blake-ai-slop/agent-view/main'
 $script:AgentViewCommands = @('up','start','down','stop','restart','status','lang','widget','autostart','update','uninstall','version','help')
-foreach ($__dep in @('Version.ps1','Settings.ps1','Format.ps1')) { $__p = Join-Path $PSScriptRoot $__dep; if (Test-Path -LiteralPath $__p) { . $__p } }
+foreach ($__dep in @('Version.ps1','Settings.ps1','Format.ps1','Update.ps1')) { $__p = Join-Path $PSScriptRoot $__dep; if (Test-Path -LiteralPath $__p) { . $__p } }
 Remove-Variable __dep,__p -ErrorAction SilentlyContinue
 
 # ---------- đường dẫn ----------
@@ -384,7 +384,7 @@ function Show-AgentViewHelp {
         @('lang [auto|vi|en]',(T 'cli.language_help')),
         @('up',(T 'cli.start_agent_view_if_stopped_alias_start')), @('down',(T 'cli.stop_agent_view_alias_stop')), @('restart',(T 'cli.restart_agent_view')),
         @('status',(T 'cli.show_remaining_quota_and_app_status_json_machine_readable')), @('widget on|off',(T 'cli.turn_the_floating_widget_on_off')),
-        @('autostart on|off',(T 'cli.turn_start_at_windows_sign_in_on_off')), @('update',(T 'cli.update_to_the_latest_version_keeping_preferences')),
+        @('autostart on|off',(T 'cli.turn_start_at_windows_sign_in_on_off')), @('update',(T 'cli.update_to_the_latest_version_keeping_preferences')), @('update --check',(T 'update.check')),
         @('uninstall',(T 'cli.uninstall_agent_view_y_skip_confirmation')), @('version',(T 'cli.print_version')), @('help',(T 'cli.show_this_help')))
     foreach ($r in $rows) { Write-Host ('  agentview {0,-17}' -f $r[0]) -ForegroundColor White -NoNewline; Write-Host $r[1] }
 }
@@ -442,7 +442,7 @@ function Invoke-AgentViewChild([string]$ArgumentText) {
 }
 function Invoke-AgentViewUpdate($Paths) {
     # Gọi thẳng installer.ps1 (bộ cài thật) bằng -File trong powershell.exe; install.ps1 chỉ là bootstrap cho irm | iex.
-    $source = $env:AGENT_VIEW_SOURCE; if ([string]::IsNullOrWhiteSpace($source)) { $source = $script:AgentViewDefaultSource }
+    $source = Get-AgentViewUpdateSource
     $tempDir = Join-Path ([IO.Path]::GetTempPath()) ('agent-view-update-' + [guid]::NewGuid().ToString('N'))
     try {
         if (Test-Path -LiteralPath $source -PathType Container) { $installer = Join-Path $source 'installer.ps1' }
@@ -508,7 +508,17 @@ function Invoke-AgentViewCli([string[]]$Argv, $Paths = (Get-AgentViewPaths)) {
             status { return (Invoke-AgentViewStatus $Paths $cmd.Rest) }
             widget { return (Invoke-AgentViewToggle $Paths 'widget' $cmd.Rest) }
             autostart { return (Invoke-AgentViewToggle $Paths 'autostart' $cmd.Rest) }
-            update { return (Invoke-AgentViewUpdate $Paths) }
+            update {
+                if ($cmd.Rest -contains '--check') {
+                    $check=Invoke-AgentViewUpdateCheck -Force
+                    if ($check.Status -eq 'error') { Write-AgentViewStep fail (T 'update.error'); return 1 }
+                    if ($check.Status -eq 'skipped') { Write-AgentViewStep info (T 'update.unsupported'); return 0 }
+                    if ($check.Status -eq 'newer') { Write-Host ((T 'update.cli_new') -f $check.Latest) }
+                    else { Write-Host ((T 'update.latest') -f $check.Current) }
+                    return 0
+                }
+                return (Invoke-AgentViewUpdate $Paths)
+            }
             uninstall { return (Invoke-AgentViewUninstall $Paths $cmd.Rest) }
         }
     } catch { Write-AgentViewStep fail ((T 'cli.error_running_agentview') + $cmd.Command + '": ' + $_.Exception.Message); return 1 }

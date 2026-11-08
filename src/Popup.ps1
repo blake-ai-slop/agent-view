@@ -23,6 +23,8 @@ Register-AgentViewStrings -Module 'popup' -Strings @{
         'errors' = ' · errors'
         '5_hours' = '5 hours'
         'week' = 'Week'
+        'update_chip' = 'v{0} ↑'
+        'update_tip' = 'Update available: v{0}'
     }
     vi = @{
         'refresh' = 'Làm mới'
@@ -47,6 +49,8 @@ Register-AgentViewStrings -Module 'popup' -Strings @{
         'errors' = ' · có lỗi'
         '5_hours' = '5 giờ'
         'week' = 'Tuần'
+        'update_chip' = 'v{0} ↑'
+        'update_tip' = 'Có bản mới: v{0}'
     }
 }
 # Popup quota (thiết kế Bezel mục 02) — WPF trên Windows PowerShell 5.1, sống trong vòng message WinForms của tray.
@@ -178,7 +182,7 @@ function Get-AgentViewPopupState {
     $st = [AppDomain]::CurrentDomain.GetData('agent-view.popup')
     if ($null -eq $st) {
         $st = @{ Window = $null; Rows = @(); Loading = $false; OnRefresh = $null; OnRetry = $null; OnSettings = $null
-                 Closing = $false; DeactivatedAt = 0; Cards = @{}; WorkArea = $null }
+                 UpdateVersion = $null; OnUpdate = $null; Closing = $false; DeactivatedAt = 0; Cards = @{}; WorkArea = $null }
         [AppDomain]::CurrentDomain.SetData('agent-view.popup', $st)
     }
     $st
@@ -239,6 +243,10 @@ function Get-AgentViewPopupXaml {
       <Ellipse x:Name="StatusDot" Width="7" Height="7" VerticalAlignment="Center"/>
       <TextBlock x:Name="StatusText" Margin="6,0,0,0" FontSize="11.5" Foreground="@@av-text-2@@" VerticalAlignment="Center"/>
      </StackPanel>
+    </Border>
+    <Border x:Name="UpdateChip" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0" Visibility="Collapsed" Cursor="Hand"
+            CornerRadius="999" Padding="7,1,7,2" BorderThickness="1">
+     <TextBlock x:Name="UpdateChipText" FontSize="11" FontWeight="SemiBold" Foreground="@@accent@@" VerticalAlignment="Center" Typography.NumeralAlignment="Tabular"/>
     </Border>
     <Button x:Name="RefreshBtn" Grid.Column="3" Margin="10,0,0,0" Style="{StaticResource IconBtn}" ToolTip="$(T 'popup.refresh')">
      <Canvas Width="16" Height="16" RenderTransformOrigin="0.5,0.5">
@@ -362,7 +370,7 @@ function New-AgentViewPopupWindow {
     $theme = Get-AgentViewTheme
     $window = [System.Windows.Markup.XamlReader]::Parse((Expand-AgentViewXaml (Get-AgentViewPopupXaml) $theme))
     $ui = @{}
-    foreach ($n in 'Shell', 'ShellScale', 'ShellShift', 'BrandRing', 'StatusDot', 'StatusText', 'RefreshBtn', 'RefreshRot', 'SettingsBtn', 'Cards', 'LiveDot', 'FootText') {
+    foreach ($n in 'Shell', 'ShellScale', 'ShellShift', 'BrandRing', 'StatusDot', 'StatusText', 'RefreshBtn', 'RefreshRot', 'SettingsBtn', 'Cards', 'LiveDot', 'FootText', 'UpdateChip', 'UpdateChipText') {
         $ui[$n] = $window.FindName($n)
     }
     $brand = New-AgentRing -Size 16 -Stroke 2.5
@@ -403,6 +411,15 @@ function New-AgentViewPopupWindow {
         $cb = $s.OnSettings
         if ($cb) { Hide-AgentViewPopup; try { & $cb } catch { } }
     })
+    $st.UpdateChipHandler = [System.Windows.Input.MouseButtonEventHandler]{
+        $_.Handled = $true
+        $s = Get-AgentViewPopupState
+        $cb = $s.OnUpdate
+        if ($cb -and $s.UpdateVersion) { Hide-AgentViewPopup; try { & $cb } catch { } }
+    }
+    $ui.UpdateChip.Background = ConvertTo-AgentViewBrush $theme['accent'] 0.14
+    $ui.UpdateChip.BorderBrush = ConvertTo-AgentViewBrush $theme['accent'] 0.5
+    $ui.UpdateChip.Add_MouseLeftButtonUp($st.UpdateChipHandler)
     $footTimer = New-Object System.Windows.Threading.DispatcherTimer
     $footTimer.Interval = [TimeSpan]::FromSeconds(20)
     $footTimer.Add_Tick({ Update-AgentViewPopupText })
@@ -571,6 +588,7 @@ function Update-AgentViewPopupView([string]$Mode = 'update') {
     $now = Get-Date
     $history = Get-AgentViewPopupHistory
     $st.Ui.SettingsBtn.Visibility = $(if ($st.OnSettings) { 'Visible' } else { 'Collapsed' })
+    Update-AgentViewPopupUpdateChip
     $order = @()
     foreach ($row in $rows) {
         $key = [string]$row.Provider; if (-not $key) { $key = [string]$row.Name }
@@ -616,6 +634,25 @@ function Update-AgentViewPopupText {
     }
 }
 
+# Chip 'v{0} ↑' góc header: chỉ hiện khi có cả phiên bản mới và OnUpdate.
+function Update-AgentViewPopupUpdateChip {
+    $st = Get-AgentViewPopupState
+    if (-not $st.Window) { return }
+    $v = [string]$st.UpdateVersion
+    if ($v -and $st.OnUpdate) {
+        $st.Ui.UpdateChipText.Text = (T 'popup.update_chip' -Args @($v))
+        $st.Ui.UpdateChip.ToolTip = (T 'popup.update_tip' -Args @($v))
+        $st.Ui.UpdateChip.Visibility = 'Visible'
+    } else { $st.Ui.UpdateChip.Visibility = 'Collapsed' }
+}
+# Tray đổi trạng thái cập nhật lúc popup đang mở/đóng. Thiếu Version/OnUpdate ⇒ chip ẩn.
+function Set-AgentViewPopupUpdate {
+    param([string]$Version, [scriptblock]$OnUpdate)
+    $st = Get-AgentViewPopupState
+    $st.UpdateVersion = $(if ($Version) { $Version } else { $null }); $st.OnUpdate = $OnUpdate
+    Update-AgentViewPopupUpdateChip
+}
+
 # ---------------------------------------------------------------- API công khai
 function Test-AgentViewPopupOpen {
     $st = Get-AgentViewPopupState
@@ -623,12 +660,13 @@ function Test-AgentViewPopupOpen {
 }
 
 function Show-AgentViewPopup {
-    param($Rows, [switch]$Loading, [scriptblock]$OnRefresh, [scriptblock]$OnRetry, [scriptblock]$OnSettings)
+    param($Rows, [switch]$Loading, [scriptblock]$OnRefresh, [scriptblock]$OnRetry, [scriptblock]$OnSettings, [string]$UpdateVersion, [scriptblock]$OnUpdate)
     $st = Get-AgentViewPopupState
     $st.Rows = $Rows; $st.Loading = [bool]$Loading
     if ($OnRefresh) { $st.OnRefresh = $OnRefresh }
     if ($OnRetry) { $st.OnRetry = $OnRetry }
     $st.OnSettings = $OnSettings      # thiếu ⇒ nút ⚙ ẩn
+    $st.UpdateVersion = $(if ($UpdateVersion) { $UpdateVersion } else { $null }); $st.OnUpdate = $OnUpdate   # thiếu ⇒ chip ẩn
     if (Test-AgentViewPopupOpen) { Hide-AgentViewPopup; return }
     $m = Get-AgentViewPopupMetrics
     # Bấm icon khay khi popup đang mở: popup mất focus (Deactivated) trước khi click tới → coi là đóng.
@@ -708,6 +746,7 @@ function Close-AgentViewPopup {
     $w.Remove_Deactivated($st.DeactivatedHandler)
     $w.Remove_Closing($st.ClosingHandler)
     $w.Remove_SizeChanged($st.SizeChangedHandler)
+    if ($st.UpdateChipHandler) { $st.Ui.UpdateChip.Remove_MouseLeftButtonUp($st.UpdateChipHandler); $st.UpdateChipHandler = $null }
     # Remove the fade clock (and its Completed callback) before closing.
     $st.Ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null)
     $w.Close()

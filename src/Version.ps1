@@ -1,1 +1,1 @@
-$script:AgentViewVersion = '0.2.0'
+﻿$script:AgentViewVersion = '0.2.1'

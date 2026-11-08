@@ -114,4 +114,19 @@ Describe 'One-line install end to end' {
         $r.Output | Should Match 'unknown option "-Bogus"'
         Test-Path -LiteralPath (Join-Path $box.Local 'agent-view') | Should Be $false
     }
+    It 'keeps disabled update checks when reinstalling and saving changed widget preferences' {
+        . "$PSScriptRoot/../src/Settings.ps1"
+        $box = New-IexTestSandbox ('update-' + [guid]::NewGuid().ToString('N'))
+        $argsText='-NoProfile -ExecutionPolicy Bypass -File "' + $bootstrap + '" -Yes -NoStart'
+        $r=Invoke-IexTestHost $winPs $argsText $box
+        $r.Code | Should Be 0
+        $path=Join-Path $box.Local 'agent-view/settings.json'
+        $s=Get-AgentViewSettings $path; $s.UpdateCheck=$false; Save-AgentViewSettings $s $path
+        $r=Invoke-IexTestHost $winPs ($argsText+' -Widget') $box
+        if ($r.Code -ne 0) { Write-Host $r.Output }
+        $r.Code | Should Be 0
+        (Get-AgentViewSettings $path).UpdateCheck | Should Be $false
+        (Get-AgentViewSettings $path).WidgetEnabled | Should Be $true
+        Test-Path (Join-Path $box.Local 'agent-view/Update.ps1') | Should Be $true
+    }
 }

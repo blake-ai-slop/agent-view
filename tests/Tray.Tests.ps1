@@ -47,10 +47,10 @@ Describe 'Tray settings and notification helpers' {
         $b = Get-AgentViewBalloon @($low) $null
         $b.Title | Should Be 'Claude Code: còn 25%'; $b.Text | Should Be 'Giới hạn 5 giờ'; $b.Icon | Should Be 'Info'
         $crit = @{ Kind='low'; Remaining=8; Title='Codex: còn 8%'; Text='Giới hạn tuần' }
-        $reset = @{ Kind='reset'; Remaining=100; Title='Codex'; Text='Codex: giới hạn 5 giờ đã đầy lại' }
+        $reset = @{ Kind='reset'; Remaining=100; Title='Codex: đã đầy lại'; Text='Giới hạn 5 giờ · còn 100%' }
         $b = Get-AgentViewBalloon @($low, $crit, $reset) $null
         $b.Count | Should Be 3; $b.Icon | Should Be 'Warning'; $b.Title | Should Be 'agent-view'
-        $b.Text | Should Be "Claude Code: còn 25% · Giới hạn 5 giờ`nCodex: còn 8% · Giới hạn tuần`nCodex: giới hạn 5 giờ đã đầy lại"
+        $b.Text | Should Be "Claude Code: còn 25% · Giới hạn 5 giờ`nCodex: còn 8% · Giới hạn tuần`nCodex: đã đầy lại · Giới hạn 5 giờ · còn 100%"
         (Get-AgentViewBalloon @($low) ([pscustomobject]@{NotifyThresholds=@(40,25)})).Icon | Should Be 'Warning'
     }
 }

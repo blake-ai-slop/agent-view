@@ -11,6 +11,7 @@ Register-AgentViewStrings -Module 'tray' -Strings @{
         'missing_quota_ps1' = 'Missing Quota.ps1'
         'cannot_read_quota' = 'Cannot read quota'
         'settings' = 'Settings…'
+        'update_click' = 'Click to update'
     }
     vi = @{
         'quota_value' = '{0} {1}%'
@@ -23,6 +24,7 @@ Register-AgentViewStrings -Module 'tray' -Strings @{
         'missing_quota_ps1' = 'Thiếu Quota.ps1'
         'cannot_read_quota' = 'Không đọc được quota'
         'settings' = 'Cài đặt…'
+        'update_click' = 'Bấm để cập nhật'
     }
 }
 . (Join-Path $PSScriptRoot 'Theme.ps1')
@@ -34,6 +36,10 @@ Add-Type -AssemblyName System.Windows.Forms,System.Drawing,PresentationFramework
 . (Join-Path $PSScriptRoot 'Popup.ps1')
 . (Join-Path $PSScriptRoot 'Widget.ps1')
 . (Join-Path $PSScriptRoot 'SettingsWindow.ps1')
+# Toast agent-view (v0.2.1); thiếu file ⇒ chỉ balloon.
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Toast.ps1')) { . (Join-Path $PSScriptRoot 'Toast.ps1') }
+# Kiểm tra cập nhật (v0.2.1); thiếu file ⇒ không có mục menu/chip/tự kiểm.
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Update.ps1')) { . (Join-Path $PSScriptRoot 'Update.ps1') }
 function Format-QuotaTooltip($Rows) {
     $parts = foreach ($row in $Rows) {
         $name = $row.Name
@@ -173,34 +179,163 @@ function Get-AgentViewBalloon($Notifications, $Settings) {
     if ($list.Count -eq 1) { $title = [string]$list[0].Title; $text = [string]$list[0].Text }
     else {
         $title = 'agent-view'
-        $text = (@($list | ForEach-Object { if ($_.Kind -eq 'low') { '{0} · {1}' -f $_.Title, $_.Text } else { [string]$_.Text } })) -join "`n"
+        $text = (@($list | ForEach-Object { '{0} · {1}' -f $_.Title, $_.Text })) -join "`n"
     }
     if (-not $text) { $text = $title }
     if ($title.Length -gt 63) { $title = $title.Substring(0, 62) + '…' }
     if ($text.Length -gt 255) { $text = $text.Substring(0, 254) + '…' }
     $icon = [Windows.Forms.ToolTipIcon]::Info; if ($warning) { $icon = [Windows.Forms.ToolTipIcon]::Warning }
-    [pscustomobject]@{ Title = $title; Text = $text; Icon = $icon; Count = $list.Count }
+    [pscustomobject]@{ Title = $title; Text = $text; Icon = $icon; Count = $list.Count; Warning = $warning; Items = $list }
 }
-# Sau mỗi refresh thành công: ghi history (mọi provider Ok), quyết định + hiện balloon, lưu notify state. Mọi lỗi bị nuốt.
-function Invoke-AgentViewRefreshHooks($Rows, $Settings, $Notify, [datetime]$Now = (Get-Date)) {
+# Hiện thông báo đã gộp: toast agent-view nếu có và người dùng không bận; bận/không có/toast ném ⇒ balloon NotifyIcon.
+# Trả 'toast' | 'balloon' | $null (không hiện được).
+function Show-AgentViewNotification($Balloon, $Notify, [scriptblock]$OnClick) {
+    if (-not $Balloon) { return $null }
+    if ((Get-Command Show-AgentViewToast -ErrorAction SilentlyContinue) -and -not (Test-AgentViewUserBusy)) {
+        try { Show-AgentViewToast -Items $Balloon.Items -Warning:$Balloon.Warning -OnClick $OnClick; return 'toast' } catch { }
+    }
+    if ($Notify) { try { $Notify.ShowBalloonTip(8000, $Balloon.Title, $Balloon.Text, $Balloon.Icon); return 'balloon' } catch { } }
+    return $null
+}
+# Sau mỗi refresh thành công: ghi history (mọi provider Ok), quyết định + hiện thông báo (toast/balloon), lưu notify state. Mọi lỗi bị nuốt.
+function Invoke-AgentViewRefreshHooks($Rows, $Settings, $Notify, [datetime]$Now = (Get-Date), [scriptblock]$OnClick = $null) {
     $rows = @(ConvertTo-QuotaRows $Rows)
     try { Add-AgentViewHistory -Rows $rows -Now $Now } catch { }
     $balloon = $null
     try {
         $result = Get-AgentViewNotifications -Rows $rows -State (Read-AgentViewNotifyState) -Settings $Settings -Now $Now
         $balloon = Get-AgentViewBalloon $result.Notifications $Settings
-        if ($balloon -and $Notify) { try { $Notify.ShowBalloonTip(8000, $balloon.Title, $balloon.Text, $balloon.Icon) } catch { } }
+        if ($balloon) { $balloon | Add-Member -NotePropertyName Shown -NotePropertyValue (Show-AgentViewNotification $balloon $Notify $OnClick) -Force }
         Save-AgentViewNotifyState $result.State
     } catch { }
     return $balloon
 }
+# ---------------------------------------------------------------- kiểm tra cập nhật (Update.ps1)
+function Test-AgentViewUpdateAvailable { [bool](Get-Command Invoke-AgentViewUpdateCheck -ErrorAction SilentlyContinue) }
+# Trạng thái cập nhật của tray. Latest = phiên bản mới hơn bản đang chạy (từ state đã lưu hoặc lần kiểm gần nhất), không có ⇒ $null.
+function New-AgentViewUpdateTrayState {
+    $u = @{ Latest = $null; Url = $null; Worker = $null; Pending = $null; Force = $false; Manual = $false; ManualQueued = $false; Job = $null }
+    if (Test-AgentViewUpdateAvailable) {
+        try {
+            $saved = Read-AgentViewUpdateState
+            if ($saved -and $saved.LatestVersion -and (Compare-AgentViewVersion $saved.LatestVersion $script:AgentViewVersion) -gt 0) { $u.Latest = [string]$saved.LatestVersion; $u.Url = $saved.LatestUrl }
+        } catch { }
+    }
+    $u
+}
+# Mục menu: đang kiểm tay ⇒ 'Đang kiểm tra…' (disabled); có bản mới ⇒ 'Cập nhật lên vX' (install); còn lại ⇒ 'Kiểm tra cập nhật' (check).
+function Get-AgentViewUpdateMenuModel($Update) {
+    if ($Update -and $Update.Manual -and ($Update.Worker -or $Update.ManualQueued)) { return [pscustomobject]@{ Text = (T 'update.checking'); Enabled = $false; Action = 'none' } }
+    if ($Update -and $Update.Latest) { return [pscustomobject]@{ Text = (T 'update.install' -Args @($Update.Latest)); Enabled = $true; Action = 'install' } }
+    [pscustomobject]@{ Text = (T 'update.check'); Enabled = $true; Action = 'check' }
+}
+function Set-AgentViewUpdateMenu($Menu) {
+    if (-not $Menu -or -not $Menu.Update) { return }
+    $model = Get-AgentViewUpdateMenuModel $Menu.UpdateState
+    $Menu.Update.Text = $model.Text; $Menu.Update.Enabled = $model.Enabled
+}
+# Item toast kiểu 'update' cho một kết quả kiểm: newer ⇒ 'Có bản mới' + 'Bấm để cập nhật'; latest; error; skipped (nguồn không hỗ trợ).
+function Get-AgentViewUpdateToastItem($Result) {
+    if (-not $Result) { return $null }
+    $title = $null; $text = ''
+    switch ([string]$Result.Status) {
+        'newer' { $title = T 'update.available' -Args @($Result.Latest); $text = T 'tray.update_click' }
+        'latest' { $title = T 'update.latest' -Args @($Result.Current) }
+        'error' { $title = T 'update.error' }
+        'skipped' { $title = T 'update.unsupported' }
+    }
+    if (-not $title) { return $null }
+    @{ Provider = 'agent-view'; Window = $null; Kind = 'update'; Remaining = $null; Title = $title; Text = $text; Status = [string]$Result.Status }
+}
+# Hiện kết quả qua cùng kênh với quota (toast; người dùng bận ⇒ balloon). Trả 'toast' | 'balloon' | $null.
+function Show-AgentViewUpdateNotification($Result, $Notify, [scriptblock]$OnInstall) {
+    $item = Get-AgentViewUpdateToastItem $Result
+    if (-not $item) { return $null }
+    $balloon = Get-AgentViewBalloon @($item) $null
+    $click = $null; if ($item.Status -eq 'newer') { $click = $OnInstall }
+    Show-AgentViewNotification $balloon $Notify $click
+}
+# Chạy Invoke-AgentViewUpdateCheck trong runspace nền (không chặn UI). -Manual ⇒ -Force + báo mọi kết quả.
+# $Tray.Update.Job (test) thay script nền; nhận ($updatePath, $force, $language).
+function Start-AgentViewUpdateCheck($Tray, [switch]$Manual) {
+    $u = $Tray.Update
+    if (-not $u -or -not (Test-AgentViewUpdateAvailable)) { return $false }
+    if ($u.Worker) {
+        # Tự kiểm đang chạy (không Force) ⇒ xếp kiểm tay chạy ngay sau.
+        if ($Manual -and -not $u.Force) { $u.Manual = $true; $u.ManualQueued = $true; Set-AgentViewUpdateMenu $Tray.Menu }
+        return $false
+    }
+    $job = $u.Job
+    if (-not $job) {
+        $job = { param($updatePath, $force, $language)
+            . $updatePath
+            Set-AgentViewLanguage $language
+            Invoke-AgentViewUpdateCheck -Force:$force
+        }
+    }
+    $u.Force = [bool]$Manual; $u.Manual = [bool]$Manual; $u.ManualQueued = $false
+    $u.Worker = [PowerShell]::Create()
+    [void]$u.Worker.AddScript($job).AddArgument((Join-Path $PSScriptRoot 'Update.ps1')).AddArgument([bool]$Manual).AddArgument((Get-AgentViewLanguage))
+    $u.Pending = $u.Worker.BeginInvoke()
+    Set-AgentViewUpdateMenu $Tray.Menu
+    return $true
+}
+# Gọi từ timer UI: worker xong ⇒ lấy kết quả rồi Complete. Runspace lỗi/không trả gì ⇒ status error.
+function Receive-AgentViewUpdateCheck($Tray) {
+    $u = $Tray.Update
+    if (-not $u -or -not $u.Worker -or -not $u.Pending.IsCompleted) { return $null }
+    $result = $null
+    try { $out = @($u.Worker.EndInvoke($u.Pending)); if ($out.Count) { $result = $out[$out.Count - 1] } } catch { }
+    finally { $u.Worker.Dispose(); $u.Worker = $null; $u.Pending = $null }
+    if (-not $result -or -not $result.Status) { $result = @{ Status = 'error'; Current = $script:AgentViewVersion; Latest = $null; Url = $null; ShouldNotify = $false } }
+    $queued = $u.ManualQueued
+    $shown = Complete-AgentViewUpdateCheck $Tray $result -Manual:($u.Force -and -not $queued)
+    if ($queued) { [void](Start-AgentViewUpdateCheck $Tray -Manual) }
+    return $shown
+}
+# Trên thread UI: ghi bản mới vào trạng thái tray, đổi menu + chip popup, rồi thông báo.
+# Kiểm tay ⇒ luôn báo; tự kiểm ⇒ chỉ khi newer + ShouldNotify (error/skipped im lặng).
+function Complete-AgentViewUpdateCheck($Tray, $Result, [switch]$Manual) {
+    $u = $Tray.Update
+    $u.Manual = $false
+    switch ([string]$Result.Status) {
+        'newer' { $u.Latest = [string]$Result.Latest; $u.Url = $Result.Url }
+        'latest' { $u.Latest = $null; $u.Url = $null }
+    }
+    Set-AgentViewUpdateMenu $Tray.Menu
+    try { Sync-AgentViewPopupUpdate $Tray } catch { }
+    if ($Manual -or ($Result.Status -eq 'newer' -and $Result.ShouldNotify)) {
+        try { return (Show-AgentViewUpdateNotification $Result $Tray.Notify $Tray.InstallUpdate) } catch { }
+    }
+    return $null
+}
+function Sync-AgentViewPopupUpdate($Tray) {
+    if (-not $Tray.Update) { return }
+    $install = $null; if ($Tray.Update.Latest) { $install = $Tray.InstallUpdate }
+    Set-AgentViewPopupUpdate -Version $Tray.Update.Latest -OnUpdate $install
+}
+# Bấm mục menu cập nhật: có bản mới ⇒ cập nhật (console riêng); không ⇒ kiểm tay nền.
+function Invoke-AgentViewUpdateMenu($Tray) {
+    $model = Get-AgentViewUpdateMenuModel $Tray.Update
+    if ($model.Action -eq 'install') { & $Tray.InstallUpdate; return 'install' }
+    if ($model.Action -eq 'check') { [void](Start-AgentViewUpdateCheck $Tray -Manual); return 'check' }
+    return 'none'
+}
+# Timer tự kiểm: lần đầu sau 2 phút, sau đó mỗi giờ; module tự lo UpdateCheck=false và hạn 24 giờ.
+function Get-AgentViewUpdateTimerPlan { @{ FirstMs = 120000; EveryMs = 3600000 } }
+function Invoke-AgentViewUpdateTimerTick($Tray, $Timer) {
+    try { if ($Timer) { $Timer.Interval = (Get-AgentViewUpdateTimerPlan).EveryMs } } catch { }
+    try { [void](Start-AgentViewUpdateCheck $Tray) } catch { }
+}
+
 function New-AgentViewTrayMenu {
     $strip = New-Object Windows.Forms.ContextMenuStrip
-    $menu = @{ Strip = $strip }
+    $menu = @{ Strip = $strip; Update = $null; UpdateState = $null }
     $menu.Settings = $strip.Items.Add('')
     $menu.Refresh = $strip.Items.Add('')
     $menu.Widget = $strip.Items.Add(''); $menu.Widget.CheckOnClick = $true
     $menu.Startup = $strip.Items.Add(''); $menu.Startup.CheckOnClick = $true
+    if (Test-AgentViewUpdateAvailable) { $menu.Update = $strip.Items.Add('') }   # ngay trên Thoát
     $menu.Exit = $strip.Items.Add('')
     Update-AgentViewTrayMenuText $menu
     $menu
@@ -211,6 +346,7 @@ function Update-AgentViewTrayMenuText($Menu) {
     $Menu.Widget.Text = (T 'tray.floating_widget')
     $Menu.Startup.Text = (T 'tray.start_at_sign_in')
     $Menu.Exit.Text = (T 'tray.quit')
+    Set-AgentViewUpdateMenu $Menu
 }
 function Update-AgentViewTrayIcon($Tray) {
     $s = $Tray.State
@@ -247,7 +383,7 @@ function Complete-AgentViewRefresh($Tray, $Rows, [datetime]$Now = (Get-Date)) {
     $s = $Tray.State
     $s.Rows = @(ConvertTo-QuotaRows $Rows)
     $settings = (Get-AgentViewWidgetState).Settings
-    [void](Invoke-AgentViewRefreshHooks -Rows $s.Rows -Settings $settings -Notify $Tray.Notify -Now $Now)
+    [void](Invoke-AgentViewRefreshHooks -Rows $s.Rows -Settings $settings -Notify $Tray.Notify -Now $Now -OnClick $Tray.OpenToastPopup)
     $s.View = @(Select-AgentViewVisibleRows $s.Rows $settings)
     $s.Loading = $false; $s.Frame = 0
     if ($Tray.Animation) {
@@ -289,6 +425,7 @@ function Invoke-AgentViewSettingsApply($Settings, $Tray) {
     }
     # Chữ trong XAML popup dựng một lần ⇒ đổi ngôn ngữ thì bỏ cửa sổ, lần mở sau dựng lại.
     if ($languageChanged) { try { Close-AgentViewPopup -Force } catch { } }
+    try { Sync-AgentViewPopupUpdate $Tray } catch { }
     $wantWidget = [bool](Get-AgentViewSettingValue $settings 'WidgetEnabled' $false)
     if ($Tray.Menu) { $Tray.Menu.Widget.Checked = $wantWidget }
     if ($wantWidget -and -not (Test-AgentViewWidgetVisible)) { Show-AgentViewWidget -Rows $s.View -Loading:$s.Loading -OnOpenPopup $Tray.OpenPopup }
@@ -303,9 +440,11 @@ function Start-AgentView {
     $tray = @{
         State = @{ Rows=@(); View=@(); Worker=$null; Pending=$null; Last=[datetime]::MinValue; Frame=0; Loading=$false; RefreshSeconds=(Get-AgentViewRefreshSeconds $settings) }
         Context = (New-Object Windows.Forms.ApplicationContext); Notify = (New-Object Windows.Forms.NotifyIcon); Menu = (New-AgentViewTrayMenu)
-        Animation = (New-Object Windows.Forms.Timer); Begin = $null; OpenPopup = $null; OpenSettings = $null; Apply = $null
+        Animation = (New-Object Windows.Forms.Timer); Begin = $null; OpenPopup = $null; OpenToastPopup = $null; OpenSettings = $null; Apply = $null
+        Update = (New-AgentViewUpdateTrayState); UpdateTimer = $null; InstallUpdate = { try { Start-AgentViewUpdate } catch { } }
     }
     $menu = $tray.Menu; $notify = $tray.Notify
+    $menu.UpdateState = $tray.Update; Set-AgentViewUpdateMenu $menu
     $menu.Widget.Checked = [bool](Get-AgentViewSettingValue $settings 'WidgetEnabled' $false)
     $menu.Startup.Checked = Test-Path (Get-AgentViewStartupPath)
     $notify.ContextMenuStrip = $menu.Strip; $notify.Icon = New-QuotaIcon @(); $notify.Text = (T 'tray.updating_quota'); $notify.Visible = $true
@@ -315,8 +454,11 @@ function Start-AgentView {
     $tray.OpenSettings = { Show-AgentViewSettingsWindow -OnSaved $tray.Apply }.GetNewClosure()
     $tray.OpenPopup = {
         $retry = { param($provider) & $tray.Begin }.GetNewClosure()
-        Show-AgentViewPopup -Rows $tray.State.View -Loading:$tray.State.Loading -OnRefresh $tray.Begin -OnRetry $retry -OnSettings $tray.OpenSettings
+        $install = $null; if ($tray.Update.Latest) { $install = $tray.InstallUpdate }
+        Show-AgentViewPopup -Rows $tray.State.View -Loading:$tray.State.Loading -OnRefresh $tray.Begin -OnRetry $retry -OnSettings $tray.OpenSettings -UpdateVersion $tray.Update.Latest -OnUpdate $install
     }.GetNewClosure()
+    # Bấm toast = mở popup như bấm icon (không đóng popup nếu đang mở).
+    $tray.OpenToastPopup = { if (-not (Test-AgentViewPopupOpen)) { & $tray.OpenPopup } }.GetNewClosure()
     $menu.Settings.Add_Click({ & $tray.OpenSettings }.GetNewClosure())
     $menu.Widget.Add_Click({
         $s=Get-AgentViewWidgetState; $s.Settings.WidgetEnabled=$this.Checked
@@ -326,6 +468,7 @@ function Start-AgentView {
     if($menu.Widget.Checked){Show-AgentViewWidget -Rows $tray.State.View -OnOpenPopup $tray.OpenPopup}
     $menu.Refresh.Add_Click($tray.Begin)
     $menu.Startup.Add_Click({ Set-AgentViewStartup $this.Checked })
+    if ($menu.Update) { $menu.Update.Add_Click({ try { [void](Invoke-AgentViewUpdateMenu $tray) } catch { } }.GetNewClosure()) }
     $menu.Exit.Add_Click({ $tray.Context.ExitThread() }.GetNewClosure())
     $notify.Add_MouseClick({ if ($_.Button -eq [Windows.Forms.MouseButtons]::Left) { & $tray.OpenPopup } }.GetNewClosure())
     $timer = New-Object Windows.Forms.Timer; $timer.Interval = 250
@@ -337,11 +480,20 @@ function Start-AgentView {
             Complete-AgentViewRefresh $tray $rows
         }
         if (-not $s.Worker -and (Test-AgentViewRefreshDue $s)) { & $tray.Begin }
+        try { [void](Receive-AgentViewUpdateCheck $tray) } catch { }   # lỗi cập nhật không ảnh hưởng refresh quota
     }.GetNewClosure())
-    try { & $tray.Begin; $timer.Start(); [Windows.Forms.Application]::Run($tray.Context) }
+    if (Test-AgentViewUpdateAvailable) {
+        $tray.UpdateTimer = New-Object Windows.Forms.Timer
+        $tray.UpdateTimer.Interval = (Get-AgentViewUpdateTimerPlan).FirstMs
+        $tray.UpdateTimer.Add_Tick({ Invoke-AgentViewUpdateTimerTick $tray $this }.GetNewClosure())
+    }
+    try { & $tray.Begin; $timer.Start(); if ($tray.UpdateTimer) { $tray.UpdateTimer.Start() }; [Windows.Forms.Application]::Run($tray.Context) }
     finally {
         $timer.Stop(); $timer.Dispose(); $tray.Animation.Stop(); $tray.Animation.Dispose()
+        if ($tray.UpdateTimer) { $tray.UpdateTimer.Stop(); $tray.UpdateTimer.Dispose() }
+        if ($tray.Update.Worker) { try { $tray.Update.Worker.Stop(); $tray.Update.Worker.Dispose() } catch { } }
         Hide-AgentViewPopup
+        if (Get-Command Close-AgentViewToast -ErrorAction SilentlyContinue) { try { Close-AgentViewToast -Force } catch { } }
         Close-AgentViewSettingsWindow -Force
         Hide-AgentViewWidget
         if ($tray.State.Worker) { $tray.State.Worker.Stop(); $tray.State.Worker.Dispose() }

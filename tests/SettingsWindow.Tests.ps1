@@ -51,6 +51,8 @@ Describe 'Settings window' {
         $ui.LangVi.IsChecked=$true; $ui.Refresh60.IsChecked=$true
         $ui.Threshold1.Text='45'; $ui.Threshold2.Text='15'
         $ui.NotifyEnabled.IsChecked=$false; $ui.NotifyReset.IsChecked=$false
+        $ui.UpdateCheck.IsChecked | Should Be $true
+        $ui.UpdateCheck.IsChecked=$false
         $ui.WidgetEnabled.IsChecked=$true; $ui.Autostart.IsChecked=$true; $ui.Codex.IsChecked=$false
         $ui.Save.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent)))
         $saved=[AppDomain]::CurrentDomain.GetData('settings-test.saved')
@@ -60,6 +62,7 @@ Describe 'Settings window' {
             $r.RefreshSeconds | Should Be 60
             $r.NotifyEnabled | Should Be $false
             $r.NotifyReset | Should Be $false
+            $r.UpdateCheck | Should Be $false
             ($r.NotifyThresholds -join ',') | Should Be '45,15'
             ($r.HiddenProviders -join ',') | Should Be codex
             $r.WidgetEnabled | Should Be $true
@@ -97,5 +100,6 @@ Describe 'Settings window' {
         $ui.TitleBar.Text | Should Be 'Cài đặt'
         $ui.Save.Content | Should Be 'Lưu'
         $ui.Autostart.Content | Should Be 'Tự chạy khi đăng nhập'
+        $ui.UpdateCheck.Content | Should Be 'Tự kiểm tra cập nhật'
     }
 }

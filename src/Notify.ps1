@@ -4,9 +4,9 @@
 if (Get-Command Register-AgentViewStrings -ErrorAction SilentlyContinue) {
     Register-AgentViewStrings -Module 'notify' -Strings @{
         en = @{ low = '{0}: {1}% left'; limit5h = '5-hour limit'; limitWeek = 'Weekly limit'; resets = '{0} · resets {1}'
-                win5h = '5-hour'; winWeek = 'weekly'; reset = '{0} {1} limit is full again' }
+                reset_title = '{0}: full again'; reset_text = '{0} · {1}% left' }
         vi = @{ low = '{0}: còn {1}%'; limit5h = 'Giới hạn 5 giờ'; limitWeek = 'Giới hạn tuần'; resets = '{0} · reset {1}'
-                win5h = '5 giờ'; winWeek = 'tuần'; reset = '{0}: giới hạn {1} đã đầy lại' }
+                reset_title = '{0}: đã đầy lại'; reset_text = '{0} · còn {1}%' }
     }
 }
 
@@ -56,10 +56,9 @@ function Copy-AgentViewNotifyEntry($Entry) {
     return @{ k = [string]$Entry.k; r = [int]$Entry.r; n = @(@($Entry.n) | Where-Object { $null -ne $_ } | ForEach-Object { [int]$_ }); low = [bool]$Entry.low; t = [string]$Entry.t }
 }
 
-function Get-AgentViewNotifyLabel([string]$Window, [string]$Kind) {
-    if ($Kind -eq 'limit') { if ($Window -eq '5h') { return (Get-AgentViewText -Key 'notify.limit5h') } else { return (Get-AgentViewText -Key 'notify.limitWeek') } }
-    if ($Window -eq '5h') { return (Get-AgentViewText -Key 'notify.win5h') }
-    return (Get-AgentViewText -Key 'notify.winWeek')
+function Get-AgentViewNotifyLabel([string]$Window) {
+    if ($Window -eq '5h') { return (Get-AgentViewText -Key 'notify.limit5h') }
+    return (Get-AgentViewText -Key 'notify.limitWeek')
 }
 
 function Get-AgentViewNotifications($Rows, $State, $Settings, [datetime]$Now = (Get-Date)) {
@@ -103,9 +102,10 @@ function Get-AgentViewNotifications($Rows, $State, $Settings, [datetime]$Now = (
                 $newCycle = ($prev.k -ne $key) -or (($remaining - $prev.r) -ge 50)
                 if ($newCycle) {
                     if ($prev.low -and $enabled -and $notifyReset) {
-                        $label = Get-AgentViewNotifyLabel $w[0] 'win'
+                        # Tiêu đề mang tên provider; nội dung chỉ tên cửa sổ + % còn (không lặp provider).
+                        $label = Get-AgentViewNotifyLabel $w[0]
                         [void]$list.Add(@{ Key = ($prev.k + '|reset'); Provider = $row.Provider; Window = $w[0]; Kind = 'reset'; Remaining = $remaining
-                            Title = $display; Text = (Get-AgentViewText -Key 'notify.reset' -Args @($display, $label)) })
+                            Title = (Get-AgentViewText -Key 'notify.reset_title' -Args @($display)); Text = (Get-AgentViewText -Key 'notify.reset_text' -Args @($label, $remaining)) })
                     }
                 } else { $entry = $prev }
             }
@@ -116,7 +116,7 @@ function Get-AgentViewNotifications($Rows, $State, $Settings, [datetime]$Now = (
                 $lowest = ($crossed | Measure-Object -Minimum).Minimum
                 $entry.n = @(@($entry.n) + $crossed | Sort-Object -Descending -Unique)
                 if ($enabled) {
-                    $limit = Get-AgentViewNotifyLabel $w[0] 'limit'
+                    $limit = Get-AgentViewNotifyLabel $w[0]
                     $resetAt = ConvertTo-AgentViewNotifyUtc $row.($w[2])
                     $text = $limit
                     if ($null -ne $resetAt) {

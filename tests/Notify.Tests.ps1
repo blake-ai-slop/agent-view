@@ -62,7 +62,9 @@ Describe 'Get-AgentViewNotifications' {
         $r = Step (New-Row -FiveUsed 1 -FiveReset $script:Reset2) $r.State @{} 1
         $r.Notifications.Count | Should Be 1
         $r.Notifications[0].Kind | Should Be 'reset'
-        $r.Notifications[0].Text | Should Be 'Claude Code 5-hour limit is full again'
+        $r.Notifications[0].Title | Should Be 'Claude Code: full again'
+        $r.Notifications[0].Text | Should Be '5-hour limit · 99% left'
+        $r.Notifications[0].Text | Should Not Match 'Claude'
         $r = Step (New-Row -FiveUsed 3 -FiveReset $script:Reset2) $r.State @{} 2
         $r.Notifications.Count | Should Be 0
         # Cùng khóa nhưng còn lại tăng ≥50 (resets_at null) ⇒ cũng là chu kỳ mới
@@ -131,6 +133,11 @@ Describe 'Get-AgentViewNotifications' {
             $r = Step (New-Row -FiveUsed 75 -FiveReset $script:Reset1) $null
             $r.Notifications[0].Title | Should Be 'Claude Code: còn 25%'
             $r.Notifications[0].Text | Should Match '^Giới hạn 5 giờ · reset '
+            $r = Step (New-Row -WeekUsed 85 -WeekReset $script:Reset1) $null
+            $r = Step (New-Row -WeekUsed 0 -WeekReset $script:Reset2) $r.State @{} 1
+            $r.Notifications[0].Kind | Should Be 'reset'
+            $r.Notifications[0].Title | Should Be 'Claude Code: đã đầy lại'
+            $r.Notifications[0].Text | Should Be 'Giới hạn tuần · còn 100%'
         } finally { Set-AgentViewLanguage en }
     }
 }

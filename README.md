@@ -1,4 +1,4 @@
-# agent-view
+﻿# agent-view
 
 **See how much Claude Code and Codex quota you have left, right in the Windows tray.**
 
@@ -115,7 +115,7 @@ Uninstall stops the app, removes the command directory from the user PATH, delet
 
 ### Notifications
 
-When a 5-hour or weekly window drops to 30% or 10% left, the tray shows a notification, once per threshold until that window resets. When a window that ran low resets, you get one "full again" notification. Alerts from the same refresh are combined into one. Turn notifications off or change the two thresholds in Settings; hidden providers never notify.
+When a 5-hour or weekly window drops to 30% or 10% left, agent-view shows a small toast in the bottom-right corner (click it to open the popup), once per threshold until that window resets. When a window that ran low resets, you get one "full again" notification. Alerts from the same refresh are combined into one. Turn notifications off or change the two thresholds in Settings; hidden providers never notify.
 
 ### Forecast
 
@@ -136,6 +136,7 @@ Open Settings from the gear button in the popup or **Settings…** in the tray m
 | `agentview lang [auto\|vi\|en]` | Show or change language (`auto` follows Windows). |
 | `agentview widget [on\|off]` | Show or change the floating widget setting. |
 | `agentview autostart [on\|off]` | Show or change start at sign-in. |
+| `agentview update --check` | Check GitHub Releases for a newer version. |
 | `agentview update` | Install the latest version, keeping current choices. |
 | `agentview uninstall [-y]` | Remove agent-view; `-y` skips the confirmation. |
 | `agentview version` | Print the version (also `-v`, `--version`). |
@@ -180,3 +181,7 @@ Tests use Pester 3.4, included with Windows PowerShell 5.1, and must run in an S
 ## License
 
 [MIT](LICENSE)
+
+## Updates
+
+Automatic update checks can be disabled in Settings. Checks only ask GitHub Releases anonymously for the latest release; they send no user data. Agent-view never updates itself automatically. Right-click the tray icon and choose **Check for updates**, or run `agentview update --check`, to check manually. When a newer version is available, the tray menu shows **Update to vX**, the popup header shows a small version badge, and clicking either (or the notification) runs `agentview update` in a console window. Local installation sources skip release checks.
