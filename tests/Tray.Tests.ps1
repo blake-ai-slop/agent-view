@@ -1,4 +1,5 @@
 ﻿. "$PSScriptRoot/../src/Tray.ps1"
+Set-AgentViewLanguage vi
 function New-TestRow($Five, $Week, $Ok=$true) {
     [pscustomobject]@{Provider='claude';Name='Claude Code';Ok=$Ok;Error='không có dữ liệu';FiveHourUsed=$Five;WeekUsed=$Week;FiveHourResetsAt=[datetime]'2026-11-07T18:30:00';WeekResetsAt=[datetime]'2026-11-10T08:15:00';FetchedAt=[datetime]'2026-11-07T17:00:00'}
 }
@@ -29,6 +30,29 @@ Describe 'Quota display rules' {
         Format-QuotaTooltip @($bad) | Should Match 'Claude : '
     }
 
+}
+
+Describe 'Tray settings and notification helpers' {
+    It 'filters hidden providers and keeps order' {
+        $codex = New-TestRow 5 0; $codex.Provider='codex'; $codex.Name='Codex'
+        $rows = @((New-TestRow 28 0), $codex)
+        @(Select-AgentViewVisibleRows $rows ([pscustomobject]@{HiddenProviders=@('claude')})).Count | Should Be 1
+        @(Select-AgentViewVisibleRows $rows ([pscustomobject]@{HiddenProviders=@('claude')}))[0].Provider | Should Be 'codex'
+        @(Select-AgentViewVisibleRows $rows ([pscustomobject]@{WidgetEnabled=$false})).Count | Should Be 2
+        @(Select-AgentViewVisibleRows (,@($rows)) $null).Count | Should Be 2
+    }
+    It 'merges notifications into one balloon and picks warning at the low threshold' {
+        Get-AgentViewBalloon @() $null | Should Be $null
+        $low = @{ Kind='low'; Remaining=25; Title='Claude Code: còn 25%'; Text='Giới hạn 5 giờ' }
+        $b = Get-AgentViewBalloon @($low) $null
+        $b.Title | Should Be 'Claude Code: còn 25%'; $b.Text | Should Be 'Giới hạn 5 giờ'; $b.Icon | Should Be 'Info'
+        $crit = @{ Kind='low'; Remaining=8; Title='Codex: còn 8%'; Text='Giới hạn tuần' }
+        $reset = @{ Kind='reset'; Remaining=100; Title='Codex'; Text='Codex: giới hạn 5 giờ đã đầy lại' }
+        $b = Get-AgentViewBalloon @($low, $crit, $reset) $null
+        $b.Count | Should Be 3; $b.Icon | Should Be 'Warning'; $b.Title | Should Be 'agent-view'
+        $b.Text | Should Be "Claude Code: còn 25% · Giới hạn 5 giờ`nCodex: còn 8% · Giới hạn tuần`nCodex: giới hạn 5 giờ đã đầy lại"
+        (Get-AgentViewBalloon @($low) ([pscustomobject]@{NotifyThresholds=@(40,25)})).Icon | Should Be 'Warning'
+    }
 }
 
 Describe 'Bezel tray layout' {

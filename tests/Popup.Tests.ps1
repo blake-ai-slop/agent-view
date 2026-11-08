@@ -1,6 +1,7 @@
 ﻿# Dùng Theme/Format/Tray THẬT (Tray.ps1 dot-source Theme, Format, Popup, Ring) — không stub.
 . "$PSScriptRoot/../src/Tray.ps1"
 
+Set-AgentViewLanguage vi
 $script:now = [datetime]'2026-11-07T14:32:00'
 function New-TestRow([string]$Provider = 'claude', $Five = 24, $Week = 12, [bool]$Ok = $true, [string]$Err = $null) {
     $name = @{ claude = 'Claude Code'; codex = 'Codex' }[$Provider]

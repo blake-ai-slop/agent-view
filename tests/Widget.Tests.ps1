@@ -1,5 +1,6 @@
 ﻿. "$PSScriptRoot/../src/Tray.ps1"
 . "$PSScriptRoot/../src/Quota.ps1"
+Set-AgentViewLanguage vi
 Describe 'Widget rows and docking' {
     AfterEach {
         Hide-AgentViewWidget
@@ -23,6 +24,18 @@ Describe 'Widget rows and docking' {
         $r.FiveHourResetsAt=$null
         $m=Get-AgentViewCardModel $r -Now $now
         Get-AgentViewWidgetDetailText $m | Should Be "5h 80% · Tuần 95% · ↺ $($m.Week.Rel)"
+    }
+    It 'adds the run-out time only for the tightest window when it runs out' {
+        $now=[datetime]'2026-11-07T12:00:00'
+        $r=[pscustomobject]@{Provider='claude';Name='Claude';Ok=$true;FiveHourUsed=60;WeekUsed=20;FiveHourResetsAt=$now.AddHours(2);WeekResetsAt=$now.AddDays(2)}
+        $hist=@(-20,-10,0 | ForEach-Object { [pscustomobject]@{p='claude';w='5h';u=(60+$_);t=$now.AddMinutes($_).ToUniversalTime().ToString('o');r=$r.FiveHourResetsAt.ToUniversalTime().ToString('o')} })
+        $m=Get-AgentViewCardModel $r -Now $now -History $hist
+        $m.Five.ForecastKind | Should Be 'runout'
+        Get-AgentViewWidgetDetailText $m $now | Should Be "5h 40% · Tuần 80% · ↺ $($m.Five.Rel) · hết ~12:40"
+        # Cửa sổ sát nhất là tuần (không đủ dữ liệu) ⇒ không thêm dù 5h sẽ hết.
+        $r.WeekUsed=70
+        $m=Get-AgentViewCardModel $r -Now $now -History $hist
+        Get-AgentViewWidgetDetailText $m $now | Should Not Match 'hết ~'
     }
     It 'aligns both providers detail text for every dock edge' {
         $rows=@([pscustomobject]@{Provider='claude';Name='Claude Code';Ok=$true;FiveHourUsed=0;WeekUsed=6;FiveHourResetsAt=$null;WeekResetsAt=$null},[pscustomobject]@{Provider='codex';Name='Codex';Ok=$true;FiveHourUsed=30;WeekUsed=5;FiveHourResetsAt=$null;WeekResetsAt=$null})

@@ -1,6 +1,7 @@
 ﻿. "$PSScriptRoot/../src/Cli.ps1"
 . "$PSScriptRoot/../installer.ps1"
 . "$PSScriptRoot/../uninstall.ps1"
+Set-AgentViewLanguage vi
 Describe 'Install and uninstall paths' {
     It 'uses only the supplied application and Startup roots' {
         $paths = Get-AgentViewPaths "$TestDrive/local" "$TestDrive/startup"
@@ -68,7 +69,7 @@ Describe 'Install options' {
 Describe 'Install payload and staging' {
     It 'includes all modules including Cli.ps1 and rejects missing local files' {
         $text=Get-Content "$PSScriptRoot/../installer.ps1" -Raw -Encoding UTF8
-        foreach ($name in @('Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','Version.ps1','Cli.ps1')) { $text | Should Match ([regex]::Escape("'"+$name+"'")) }
+        foreach ($name in @('I18n.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','SettingsWindow.ps1','History.ps1','Forecast.ps1','Notify.ps1','Version.ps1','Cli.ps1')) { $text | Should Match ([regex]::Escape("'"+$name+"'")) }
         $text | Should Match 'Thiếu file cài đặt'
     }
     It 'picks the repo, a local source folder, or a URL' {
@@ -81,7 +82,8 @@ Describe 'Install payload and staging' {
     It 'stages the full repo payload and fails before touching the install dir when a file is missing' {
         $repo = Resolve-Path "$PSScriptRoot/.."
         $n = Save-AgentViewPayload ([pscustomobject]@{ Local=$true; Base=$repo }) "$TestDrive/stage"
-        $n | Should Be 13
+        $n | Should Be 18
+        Test-Path "$TestDrive/stage/I18n.ps1" | Should Be $true
         Test-Path "$TestDrive/stage/Cli.ps1" | Should Be $true
         Test-Path "$TestDrive/stage/Version.ps1" | Should Be $true
         Test-Path "$TestDrive/stage/uninstall.ps1" | Should Be $true
@@ -93,7 +95,7 @@ Describe 'Install payload and staging' {
         $repo = Resolve-Path "$PSScriptRoot/.."
         [void](Save-AgentViewPayload ([pscustomobject]@{ Local=$true; Base=$repo }) "$TestDrive/st3")
         $paths = Get-AgentViewPaths "$TestDrive/inst" "$TestDrive/startup"
-        (Install-AgentViewFiles "$TestDrive/st3" $paths) | Should Be 13
+        (Install-AgentViewFiles "$TestDrive/st3" $paths) | Should Be 18
         Test-Path $paths.Launcher | Should Be $true
         Set-Content $paths.Entry 'OLD'
         Remove-Item "$TestDrive/st3/Widget.ps1"

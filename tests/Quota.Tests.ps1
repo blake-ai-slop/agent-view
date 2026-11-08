@@ -1,6 +1,7 @@
 ﻿# Pester 3.4: chạy bằng powershell.exe 5.1.
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here '..\src\Quota.ps1')
+Set-AgentViewLanguage vi
 $fx = Join-Path $here 'fixtures'
 
 function New-TestOps([hashtable]$Over) {

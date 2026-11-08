@@ -1,4 +1,4 @@
-# The real one-line install path: GitHub serves install.ps1 as UTF-8 bytes, `irm` decodes them (keeping a BOM as
+﻿# The real one-line install path: GitHub serves install.ps1 as UTF-8 bytes, `irm` decodes them (keeping a BOM as
 # U+FEFF) and `iex` runs the text. Simulate exactly that in Windows PowerShell 5.1 and pwsh 7 (when present),
 # installing from this checkout into temporary LOCALAPPDATA/Startup/user PATH/TEMP folders.
 $repo = (Resolve-Path "$PSScriptRoot/..").ProviderPath
@@ -53,7 +53,7 @@ function New-IexTestRunner([string]$Mode) {
 function Assert-IexTestInstalled($Box, $Result) {
     $Result.Code | Should Be 0
     $root = Join-Path $Box.Local 'agent-view'
-    foreach ($name in @('Tray.ps1','agent-view.ps1','Quota.ps1','Process.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','Version.ps1','Cli.ps1','uninstall.ps1','launch.vbs','bin\agentview.cmd')) {
+    foreach ($name in @('I18n.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Process.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','Version.ps1','Cli.ps1','uninstall.ps1','launch.vbs','bin\agentview.cmd')) {
         Test-Path -LiteralPath (Join-Path $root $name) | Should Be $true
     }
     Test-Path -LiteralPath (Join-Path $Box.Startup 'agent-view.lnk') | Should Be $true

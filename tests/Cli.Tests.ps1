@@ -1,4 +1,5 @@
 ﻿. "$PSScriptRoot/../src/Cli.ps1"
+Set-AgentViewLanguage vi
 Describe 'agentview command parsing' {
     It 'defaults to help and resolves aliases' {
         (Resolve-AgentViewCommand @()).Command | Should Be 'help'
@@ -84,6 +85,7 @@ Describe 'version source' {
 }
 
 Describe 'status output' {
+    BeforeEach { Set-AgentViewLanguage vi }
     $now = [datetime]'2026-11-07T12:00:00'
     $app = [pscustomobject]@{ Version='0.2.0'; State='running'; Autostart=$true; Widget=$false }
     $rows = @(

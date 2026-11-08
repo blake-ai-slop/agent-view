@@ -1,11 +1,26 @@
-﻿# Floating Bezel widget, created lazily on the tray STA thread.
+﻿. (Join-Path $PSScriptRoot 'I18n.ps1')
+Register-AgentViewStrings -Module 'widget' -Strings @{
+    en = @{
+        'title' = 'agent-view widget'
+        'five' = '5h {0}'
+        'week' = 'Week {0}'
+        'runout' = 'out ~{0}'
+    }
+    vi = @{
+        'title' = 'agent-view widget'
+        'five' = '5h {0}'
+        'week' = 'Tuần {0}'
+        'runout' = 'hết ~{0}'
+    }
+}
+# Floating Bezel widget, created lazily on the tray STA thread.
 . (Join-Path $PSScriptRoot 'Ring.ps1')
 . (Join-Path $PSScriptRoot 'Settings.ps1')
 . (Join-Path $PSScriptRoot 'Popup.ps1')
-function Get-AgentViewWidgetDetailText($Model) {
+function Get-AgentViewWidgetDetailText($Model, [datetime]$Now = (Get-Date)) {
     $parts = @()
-    if ($null -ne $Model.Five.Remaining) { $parts += "5h $($Model.Five.ValueText)" }
-    if ($null -ne $Model.Week.Remaining) { $parts += "Tuần $($Model.Week.ValueText)" }
+    if ($null -ne $Model.Five.Remaining) { $parts += (T 'widget.five' -Args @($Model.Five.ValueText)) }
+    if ($null -ne $Model.Week.Remaining) { $parts += (T 'widget.week' -Args @($Model.Week.ValueText)) }
     $text = $parts -join ' · ' 
     $primary=$Model.Five; $fallback=$Model.Week
     if($null -eq $primary.Remaining -or ($null -ne $fallback.Remaining -and $fallback.Remaining -lt $primary.Remaining)) {
@@ -14,6 +29,12 @@ function Get-AgentViewWidgetDetailText($Model) {
     $reset=$primary.Rel
     if(-not $reset){$reset=$fallback.Rel}
     if($reset){$text+=" · ↺ $reset"}
+    # Dự báo chỉ cho cửa sổ sát nhất và chỉ khi sẽ hết trước reset.
+    if($primary.ForecastKind -eq 'runout' -and $null -ne $primary.ForecastAt){
+        $at=[datetime]$primary.ForecastAt
+        $when=$(if($at.Date -eq $Now.Date){$at.ToString('HH:mm')}else{Format-QuotaResetAbsolute $at $Now})
+        $text+=' · '+(T 'widget.runout' -Args @($when))
+    }
     $text
 }
 function Get-AgentViewWidgetEdge($Area, [double]$X, [double]$Y) {
@@ -93,13 +114,14 @@ function New-AgentViewWidgetWindow {
     Initialize-AgentViewWpf
     $s=Get-AgentViewWidgetState
     $x=@'
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="agent-view widget" WindowStyle="None" AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False" ShowActivated="False" Topmost="True" ResizeMode="NoResize" SizeToContent="WidthAndHeight" FontFamily="Segoe UI" Foreground="@@av-text@@">
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="$(T 'widget.title')" WindowStyle="None" AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False" ShowActivated="False" Topmost="True" ResizeMode="NoResize" SizeToContent="WidthAndHeight" FontFamily="Segoe UI" Foreground="@@av-text@@">
 <Border x:Name="Shell" Margin="28,20,28,40" Padding="8" CornerRadius="14" BorderBrush="@@av-stroke@@" BorderThickness="1">
 <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="0,1"><GradientStop Color="@@av-bg-top@@" Offset="0"/><GradientStop Color="@@av-bg@@" Offset="1"/></LinearGradientBrush></Border.Background>
 <Border.Effect><DropShadowEffect BlurRadius="28" ShadowDepth="10" Opacity="0.5"/></Border.Effect>
 <StackPanel x:Name="List"><TextBlock x:Name="Grip" Text="⠿" Foreground="@@av-text-3@@" HorizontalAlignment="Center" Cursor="SizeAll" Height="14"/></StackPanel>
 </Border></Window>
 '@
+    $x=$x.Replace("`$(T 'widget.title')", (T 'widget.title'))
     $w=[Windows.Markup.XamlReader]::Parse((Expand-AgentViewXaml $x (Get-AgentViewTheme)));$s.Window=$w;$s.List=$w.FindName('List')
     [Windows.Forms.Integration.ElementHost]::EnableModelessKeyboardInterop($w)
     $w.Add_SourceInitialized({
@@ -144,18 +166,19 @@ function Update-AgentViewWidget {
             $ring.HorizontalAlignment='Center'; [void]$compact.Children.Add($ring)
             $label=New-Object Windows.Controls.TextBlock; $label.FontSize=12;$label.FontWeight='SemiBold';$label.HorizontalAlignment='Center';[void]$compact.Children.Add($label)
             $detail=New-Object Windows.Controls.StackPanel; $detail.VerticalAlignment='Center';$detail.MaxWidth=0;$detail.Opacity=0;$detail.ClipToBounds=$true
-            $name=New-Object Windows.Controls.TextBlock;$name.FontSize=12.5;$name.FontWeight='SemiBold'
-            $line=New-Object Windows.Controls.TextBlock;$line.FontSize=11.5;$line.Foreground=ConvertTo-AgentViewBrush (Get-AgentViewTheme)['av-text-2']
+            $name=New-Object Windows.Controls.TextBlock;$name.TextTrimming='CharacterEllipsis';$name.FontSize=12.5;$name.FontWeight='SemiBold'
+            $line=New-Object Windows.Controls.TextBlock;$line.TextTrimming='CharacterEllipsis';$line.FontSize=11.5;$line.Foreground=ConvertTo-AgentViewBrush (Get-AgentViewTheme)['av-text-2']
             [void]$detail.Children.Add($name);[void]$detail.Children.Add($line)
             [void]$panel.Children.Add($compact);[void]$panel.Children.Add($detail);[void]$s.List.Children.Add($panel)
             $panel.Add_MouseLeftButtonUp({$s=Get-AgentViewWidgetState;if($s.OnOpenPopup){& $s.OnOpenPopup}})
             $s.Cards+=@{Panel=$panel;Compact=$compact;Detail=$detail;Name=$name;Line=$line;Label=$label;Ring=$ring}
         }
     }
+    $history=Get-AgentViewPopupHistory; $now=Get-Date
     for($i=0;$i -lt $rowsFlat.Count;$i++){
-        $r=$rowsFlat[$i];$c=$s.Cards[$i];$m=Get-AgentViewCardModel $r -Loading:$Loading
+        $r=$rowsFlat[$i];$c=$s.Cards[$i];$m=Get-AgentViewCardModel $r -Loading:$Loading -Now $now -History $history
         $c.Name.Text=$m.Name; $c.Line.Text=$m.ErrDetail
-        if($m.State -eq 'ok'){$c.Line.Text=Get-AgentViewWidgetDetailText $m}
+        if($m.State -eq 'ok'){$c.Line.Text=Get-AgentViewWidgetDetailText $m $now}
         $c.Label.Text=$(if($Loading){'…'}elseif($m.State -eq 'error'){'?'}else{"$($m.Value)%"})
         $c.Label.Foreground=ConvertTo-AgentViewBrush (Get-AgentViewTheme)[$m.Level]
         $label=$c.Label

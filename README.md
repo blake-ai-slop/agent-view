@@ -40,7 +40,9 @@ You need Windows 10 or 11 with the built-in Windows PowerShell 5.1, and Claude C
 
 - **5-hour and weekly limits** as a percentage remaining, for Claude Code and Codex.
 - **Color by level:** green above 30%, amber at 11–30%, red at 10% or less.
-- **Detail popup** with both windows per provider and a countdown to each reset.
+- **Detail popup** with both windows per provider, a countdown to each reset, and a run-out forecast.
+- **Notifications** when a window runs low and when it is full again.
+- **Settings window** for language, refresh interval, notifications, widget, start at sign-in, and hidden providers.
 - **Floating widget** that docks to the left, right, or top screen edge and remembers its place.
 - **Only what exists:** if a provider reports just one window, the other is hidden.
 - **`agentview` command** to start, stop, check status, update, and uninstall.
@@ -56,7 +58,7 @@ You need Windows 10 or 11 with the built-in Windows PowerShell 5.1, and Claude C
   <img src="docs/images/widget-top.png" alt="Widget docked to the top edge, expanded" width="420">
 </p>
 
-> The app, installer, and terminal messages are currently in Vietnamese.
+> The app, installer, and terminal support English and Vietnamese. The default language follows Windows; use `agentview lang auto|vi|en` to change it.
 
 ## Installation options
 
@@ -108,8 +110,20 @@ Uninstall stops the app, removes the command directory from the user PATH, delet
 
 - **Tray icon:** shows the lowest remaining percentage. Hover for a summary.
 - **Click** the icon to open the detail popup. Press Esc or click elsewhere to close it.
-- **Right-click** to refresh, toggle the floating widget, toggle start at sign-in, or quit.
+- **Right-click** to open settings, refresh, toggle the floating widget, toggle start at sign-in, or quit.
 - **Widget:** hover to expand, click to open the popup, drag the grip to dock it to another edge. Its edge, position, and visibility are saved in `%LOCALAPPDATA%\agent-view\settings.json`.
+
+### Notifications
+
+When a 5-hour or weekly window drops to 30% or 10% left, the tray shows a notification, once per threshold until that window resets. When a window that ran low resets, you get one "full again" notification. Alerts from the same refresh are combined into one. Turn notifications off or change the two thresholds in Settings; hidden providers never notify.
+
+### Forecast
+
+Under each bar, the popup estimates when that window runs out at your current pace (`Runs out ~15:40`, amber or red), or says `Enough until reset`. It needs at least three readings over 10 minutes or more in the current window (the last hour for the 5-hour window, the last day for the weekly one); until then the line is hidden. The widget adds `out ~15:40` for its tightest window. Readings are stored locally in `%LOCALAPPDATA%\agent-view\history.json` (provider, window, percent used, time) for 8 days.
+
+### Settings
+
+Open Settings from the gear button in the popup or **Settings…** in the tray menu. You can change the language, refresh interval (1, 2, or 5 minutes; default 2), notifications and their thresholds, the floating widget, start at sign-in, and hide providers you do not use. Hidden providers disappear from the icon, tooltip, popup, and widget. Changes apply immediately and are saved in `%LOCALAPPDATA%\agent-view\settings.json`.
 
 ### Terminal commands
 
@@ -119,6 +133,7 @@ Uninstall stops the app, removes the command directory from the user PATH, delet
 | `agentview down` | Stop the app (alias: `stop`). |
 | `agentview restart` | Restart the app. |
 | `agentview status [--json]` | Show remaining quota and app state; `--json` prints machine-readable output. |
+| `agentview lang [auto\|vi\|en]` | Show or change language (`auto` follows Windows). |
 | `agentview widget [on\|off]` | Show or change the floating widget setting. |
 | `agentview autostart [on\|off]` | Show or change start at sign-in. |
 | `agentview update` | Install the latest version, keeping current choices. |
@@ -126,7 +141,7 @@ Uninstall stops the app, removes the command directory from the user PATH, delet
 | `agentview version` | Print the version (also `-v`, `--version`). |
 | `agentview help` | List commands (also `-h`, `--help`). |
 
-Changing the widget or start-at-sign-in setting restarts the app if it is running. `agentview update` uses `AGENT_VIEW_SOURCE` when it is set.
+Changing the language, widget, or start-at-sign-in setting restarts the app if it is running. `agentview update` uses `AGENT_VIEW_SOURCE` when it is set.
 
 ## How it works and privacy
 
@@ -134,7 +149,7 @@ Changing the widget or start-at-sign-in setting restarts the app if it is runnin
 
 **Codex.** The app asks the local Codex CLI through its `app-server` rate-limit API.
 
-**What stays private.** The app does not read credential files, does not store account details, and does not send data anywhere. Only quota percentages and reset times are kept, for display. The only network traffic is the provider CLIs talking to their own services.
+**What stays private.** The app does not read credential files, does not store account details, and does not send data anywhere. Only quota percentages and reset times are kept: for display, and as a local usage history for the forecast (no account data). The only network traffic is the provider CLIs talking to their own services.
 
 ## FAQ
 

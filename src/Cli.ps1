@@ -1,9 +1,134 @@
-﻿# Lệnh `agentview` + hàm dùng chung cho installer.ps1/uninstall.ps1 (đường dẫn, phát hiện đang chạy, PATH người dùng, shim, tự chạy).
+﻿. (Join-Path $PSScriptRoot 'I18n.ps1')
+Register-AgentViewStrings -Module 'cli' -Strings @{
+    en = @{
+        'widget_label' = ' · widget: '
+        'reset' = 'reset'
+        'language_help' = 'Show or change language (auto: Windows language)'
+        'language_invalid' = 'Use: agentview lang auto|vi|en'
+
+        'running' = 'running'
+        'another_copy_is_running' = 'another copy is running'
+        'stopped' = 'stopped'
+        'start_at_sign_in' = ' · start at sign-in: '
+        'on' = 'on'
+        'off' = 'off'
+        'left' = '{0,-13} {1,3}% left  {2}'
+        '5_hours' = '5 hours'
+        'week' = 'Week'
+        'left_9' = '  {0,-11} {1,3}% left  {2}'
+        'control_agent_view_from_your_terminal' = ' — control agent-view from your terminal'
+        'start_agent_view_if_stopped_alias_start' = 'Start agent-view if stopped (alias: start)'
+        'stop_agent_view_alias_stop' = 'Stop agent-view (alias: stop)'
+        'restart_agent_view' = 'Restart agent-view'
+        'show_remaining_quota_and_app_status_json_machine_readable' = 'Show remaining quota and app status (--json: machine readable)'
+        'turn_the_floating_widget_on_off' = 'Turn the floating widget on/off'
+        'turn_start_at_windows_sign_in_on_off' = 'Turn start at Windows sign-in on/off'
+        'update_to_the_latest_version_keeping_preferences' = 'Update to the latest version, keeping preferences'
+        'uninstall_agent_view_y_skip_confirmation' = 'Uninstall agent-view (-y: skip confirmation)'
+        'print_version' = 'Print version'
+        'show_this_help' = 'Show this help'
+        'restarting_agent_view_to_apply_changes' = 'Restarting agent-view to apply changes…'
+        'restarted_agent_view' = 'Restarted agent-view.'
+        'could_not_restart_agent_view' = 'Could not restart agent-view.'
+        'try_agentview_up' = 'Try: agentview up'
+        'agent_view_is_already_running_tray_icon_beside_the_clock' = 'agent-view is already running (tray icon beside the clock).'
+        'another_copy_of_agent_view_is_running_from_a_different_location' = 'Another copy of agent-view is running from a different location.'
+        'quit_that_copy_right_click_its_tray_icon_quit_and_try_again' = 'Quit that copy (right-click its tray icon → Quit) and try again.'
+        'cannot_find' = 'Cannot find '
+        'reinstall_agentview_update' = 'Reinstall: agentview update'
+        'started_agent_view_click_the_tray_icon_to_view_quota' = 'Started agent-view — click the tray icon to view quota.'
+        'could_not_start_agent_view' = 'Could not start agent-view.'
+        'try_again_agentview_restart' = 'Try again: agentview restart'
+        'stopped_agent_view' = 'Stopped agent-view.'
+        'agent_view_is_stopped' = 'agent-view is stopped.'
+        'reading_quota' = 'Reading quota…'
+        'floating_widget' = 'Floating widget'
+        'start_at_sign_in_37' = 'Start at sign-in'
+        'change_agentview' = '   (change: agentview '
+        'unknown_value' = 'Unknown value "'
+        'use_agentview' = 'Use: agentview '
+        'downloading_installer_from' = 'Downloading installer from '
+        'could_not_download_the_installer' = 'Could not download the installer.'
+        'check_your_connection_and_retry_agentview_update' = ' — check your connection and retry: agentview update'
+        'confirmation_required' = 'Confirmation required.'
+        'run_agentview_uninstall_y' = 'Run: agentview uninstall -y'
+        'uninstall_agent_view_from_this_computer_y_n' = 'Uninstall agent-view from this computer? [y/N]'
+        'cancelled_nothing_was_removed' = 'Cancelled. Nothing was removed.'
+        'cannot_find_uninstall_ps1' = 'Cannot find uninstall.ps1.'
+        'reinstall_with_agentview_update_and_try_again' = 'Reinstall with agentview update and try again.'
+        'agentview_unknown_command' = 'agentview: unknown command "'
+        'did_you_mean_agentview' = 'Did you mean: agentview '
+        'type_agentview_help_for_available_commands' = 'Type agentview help for available commands.'
+        'error_running_agentview' = 'Error running "agentview '
+    }
+    vi = @{
+        'widget_label' = ' · widget: '
+        'reset' = 'reset'
+        'language_help' = 'Xem hoặc đổi ngôn ngữ (auto: theo Windows)'
+        'language_invalid' = 'Dùng: agentview lang auto|vi|en'
+
+        'running' = 'đang chạy'
+        'another_copy_is_running' = 'một bản khác đang chạy'
+        'stopped' = 'không chạy'
+        'start_at_sign_in' = ' · tự chạy: '
+        'on' = 'bật'
+        'off' = 'tắt'
+        'left' = '{0,-13} còn {1,3}%  {2}'
+        '5_hours' = '5 giờ'
+        'week' = 'Tuần'
+        'left_9' = '  {0,-11} còn {1,3}%  {2}'
+        'control_agent_view_from_your_terminal' = ' — điều khiển agent-view từ terminal'
+        'start_agent_view_if_stopped_alias_start' = 'Chạy agent-view nếu chưa chạy (bí danh: start)'
+        'stop_agent_view_alias_stop' = 'Tắt agent-view (bí danh: stop)'
+        'restart_agent_view' = 'Khởi động lại'
+        'show_remaining_quota_and_app_status_json_machine_readable' = 'Xem quota còn lại và trạng thái app (--json: dạng máy đọc)'
+        'turn_the_floating_widget_on_off' = 'Bật/tắt widget nổi'
+        'turn_start_at_windows_sign_in_on_off' = 'Bật/tắt tự chạy khi đăng nhập Windows'
+        'update_to_the_latest_version_keeping_preferences' = 'Cập nhật bản mới nhất, giữ lựa chọn hiện tại'
+        'uninstall_agent_view_y_skip_confirmation' = 'Gỡ agent-view (-y: không hỏi lại)'
+        'print_version' = 'In phiên bản'
+        'show_this_help' = 'Trợ giúp này'
+        'restarting_agent_view_to_apply_changes' = 'Khởi động lại agent-view để áp dụng…'
+        'restarted_agent_view' = 'Đã khởi động lại agent-view.'
+        'could_not_restart_agent_view' = 'Không khởi động lại được agent-view.'
+        'try_agentview_up' = 'Thử: agentview up'
+        'agent_view_is_already_running_tray_icon_beside_the_clock' = 'agent-view đã chạy sẵn (icon ở khay cạnh đồng hồ).'
+        'another_copy_of_agent_view_is_running_from_a_different_location' = 'Một bản agent-view khác đang chạy (không phải bản cài ở đây).'
+        'quit_that_copy_right_click_its_tray_icon_quit_and_try_again' = 'Thoát bản đó (chuột phải icon khay → Thoát) rồi thử lại.'
+        'cannot_find' = 'Không thấy '
+        'reinstall_agentview_update' = 'Cài lại: agentview update'
+        'started_agent_view_click_the_tray_icon_to_view_quota' = 'Đã chạy agent-view — bấm icon cạnh đồng hồ để xem quota.'
+        'could_not_start_agent_view' = 'agent-view không khởi động được.'
+        'try_again_agentview_restart' = 'Thử lại: agentview restart'
+        'stopped_agent_view' = 'Đã tắt agent-view.'
+        'agent_view_is_stopped' = 'agent-view không chạy.'
+        'reading_quota' = 'Đang đọc quota…'
+        'floating_widget' = 'Widget nổi'
+        'start_at_sign_in_37' = 'Tự chạy khi đăng nhập'
+        'change_agentview' = '   (đổi: agentview '
+        'unknown_value' = 'Không hiểu "'
+        'use_agentview' = 'Dùng: agentview '
+        'downloading_installer_from' = 'Tải trình cài từ '
+        'could_not_download_the_installer' = 'Không tải được trình cài.'
+        'check_your_connection_and_retry_agentview_update' = ' — kiểm tra mạng rồi thử lại: agentview update'
+        'confirmation_required' = 'Cần xác nhận.'
+        'run_agentview_uninstall_y' = 'Chạy: agentview uninstall -y'
+        'uninstall_agent_view_from_this_computer_y_n' = 'Gỡ agent-view khỏi máy này? [y/N]'
+        'cancelled_nothing_was_removed' = 'Đã hủy, không gỡ gì.'
+        'cannot_find_uninstall_ps1' = 'Không thấy uninstall.ps1.'
+        'reinstall_with_agentview_update_and_try_again' = 'Cài lại bằng agentview update rồi thử lại.'
+        'agentview_unknown_command' = 'agentview: không có lệnh "'
+        'did_you_mean_agentview' = 'Ý bạn là: agentview '
+        'type_agentview_help_for_available_commands' = 'Gõ agentview help để xem danh sách lệnh.'
+        'error_running_agentview' = 'Lỗi khi chạy "agentview '
+    }
+}
+# Lệnh `agentview` + hàm dùng chung cho installer.ps1/uninstall.ps1 (đường dẫn, phát hiện đang chạy, PATH người dùng, shim, tự chạy).
 # Dot-source không side effect. Chạy được trên Windows PowerShell 5.1 và pwsh 7; app luôn chạy bằng powershell.exe.
 # Biến môi trường ẩn cho thử nghiệm: AGENT_VIEW_STARTUP_DIR (thư mục Startup), AGENT_VIEW_USER_PATH_FILE (PATH người dùng giả).
 $script:AgentViewVersion = '0.0.0'  # dự phòng khi thiếu Version.ps1 (vd. bản sao tạm lúc gỡ); nguồn thật: src/Version.ps1
 $script:AgentViewDefaultSource = 'https://raw.githubusercontent.com/blake-ai-slop/agent-view/main'
-$script:AgentViewCommands = @('up','start','down','stop','restart','status','widget','autostart','update','uninstall','version','help')
+$script:AgentViewCommands = @('up','start','down','stop','restart','status','lang','widget','autostart','update','uninstall','version','help')
 foreach ($__dep in @('Version.ps1','Settings.ps1','Format.ps1')) { $__p = Join-Path $PSScriptRoot $__dep; if (Test-Path -LiteralPath $__p) { . $__p } }
 Remove-Variable __dep,__p -ErrorAction SilentlyContinue
 
@@ -151,11 +276,11 @@ function Get-AgentViewLevelColor([string]$Level) {
 }
 function Format-AgentViewReset($At, [datetime]$Now) {
     if ($null -eq $At) { return '' }
-    'reset ' + (Format-QuotaResetRelative $At $Now) + ' (' + (Format-QuotaResetAbsolute $At $Now) + ')'
+    (T 'cli.reset') + ' ' + (Format-QuotaResetRelative $At $Now) + ' (' + (Format-QuotaResetAbsolute $At $Now) + ')'
 }
 function Get-AgentViewAppLine($App) {
-    $state = switch ($App.State) { running { 'đang chạy' } other { 'một bản khác đang chạy' } default { 'không chạy' } }
-    'agent-view ' + $App.Version + ' · ' + $state + ' · tự chạy: ' + $(if ($App.Autostart) { 'bật' } else { 'tắt' }) + ' · widget: ' + $(if ($App.Widget) { 'bật' } else { 'tắt' })
+    $state = switch ($App.State) { running { (T 'cli.running') } other { (T 'cli.another_copy_is_running') } default { (T 'cli.stopped') } }
+    'agent-view ' + $App.Version + ' · ' + $state + (T 'cli.start_at_sign_in') + $(if ($App.Autostart) { (T 'cli.on') } else { (T 'cli.off') }) + (T 'cli.widget_label') + $(if ($App.Widget) { (T 'cli.on') } else { (T 'cli.off') })
 }
 # Dòng in cho `status`: mỗi phần tử @{Text; Color}.
 function Format-AgentViewStatusLines($Quotas, $App, [datetime]$Now = (Get-Date)) {
@@ -168,11 +293,11 @@ function Format-AgentViewStatusLines($Quotas, $App, [datetime]$Now = (Get-Date))
             $lines.Add([pscustomobject]@{ Text=('{0,-13} {1}' -f $q.Name, $q.Error); Color='DarkGray' }); continue
         }
         $level = Get-QuotaLevel $remaining
-        $lines.Add([pscustomobject]@{ Text=('{0,-13} còn {1,3}%  {2}' -f $q.Name, $remaining, (Get-QuotaStatusText $level)); Color=(Get-AgentViewLevelColor $level) })
-        foreach ($w in @(@('5 giờ',$q.FiveHourUsed,$q.FiveHourResetsAt), @('Tuần',$q.WeekUsed,$q.WeekResetsAt))) {
+        $lines.Add([pscustomobject]@{ Text=((T 'cli.left') -f $q.Name, $remaining, (Get-QuotaStatusText $level)); Color=(Get-AgentViewLevelColor $level) })
+        foreach ($w in @(@((T 'cli.5_hours'),$q.FiveHourUsed,$q.FiveHourResetsAt), @((T 'cli.week'),$q.WeekUsed,$q.WeekResetsAt))) {
             if ($null -eq $w[1]) { continue }  # provider có thể bỏ một cửa sổ (Ok nhưng 5h/Tuần = null)
             $left = 100 - [int]$w[1]
-            $lines.Add([pscustomobject]@{ Text=('  {0,-11} còn {1,3}%  {2}' -f $w[0], $left, (Format-AgentViewReset $w[2] $Now)); Color=(Get-AgentViewLevelColor (Get-QuotaLevel $left)) })
+            $lines.Add([pscustomobject]@{ Text=((T 'cli.left_9') -f $w[0], $left, (Format-AgentViewReset $w[2] $Now)); Color=(Get-AgentViewLevelColor (Get-QuotaLevel $left)) })
         }
     }
     return $lines.ToArray()
@@ -247,46 +372,47 @@ function Resolve-AgentViewCommand([string[]]$Argv) {
     [pscustomobject]@{ Command=$null; Rest=$rest; Error='unknown'; Suggestion=(Get-AgentViewSuggestion $word) }
 }
 function ConvertFrom-AgentViewSwitch([string]$Value) {
-    switch -regex ([string]$Value) { '^(?i)(on|1|true|bật|bat)$' { return $true } '^(?i)(off|0|false|tắt|tat)$' { return $false } }
+    switch -regex ([string]$Value) { '^(?i)(on|1|true|b\u1eadt|bat)$' { return $true } '^(?i)(off|0|false|t\u1eaft|tat)$' { return $false } }
     return $null
 }
 function Test-AgentViewYesFlag($Rest) { @($Rest | Where-Object { $_ -match '^(?i)(-y|--yes|-yes|/y)$' }).Count -gt 0 }
 
 function Show-AgentViewHelp {
-    Write-Host ('agentview ' + $script:AgentViewVersion + ' — điều khiển agent-view từ terminal') -ForegroundColor Cyan
+    Write-Host ('agentview ' + $script:AgentViewVersion + (T 'cli.control_agent_view_from_your_terminal')) -ForegroundColor Cyan
     Write-Host ''
     $rows = @(
-        @('up','Chạy agent-view nếu chưa chạy (bí danh: start)'), @('down','Tắt agent-view (bí danh: stop)'), @('restart','Khởi động lại'),
-        @('status','Xem quota còn lại và trạng thái app (--json: dạng máy đọc)'), @('widget on|off','Bật/tắt widget nổi'),
-        @('autostart on|off','Bật/tắt tự chạy khi đăng nhập Windows'), @('update','Cập nhật bản mới nhất, giữ lựa chọn hiện tại'),
-        @('uninstall','Gỡ agent-view (-y: không hỏi lại)'), @('version','In phiên bản'), @('help','Trợ giúp này'))
+        @('lang [auto|vi|en]',(T 'cli.language_help')),
+        @('up',(T 'cli.start_agent_view_if_stopped_alias_start')), @('down',(T 'cli.stop_agent_view_alias_stop')), @('restart',(T 'cli.restart_agent_view')),
+        @('status',(T 'cli.show_remaining_quota_and_app_status_json_machine_readable')), @('widget on|off',(T 'cli.turn_the_floating_widget_on_off')),
+        @('autostart on|off',(T 'cli.turn_start_at_windows_sign_in_on_off')), @('update',(T 'cli.update_to_the_latest_version_keeping_preferences')),
+        @('uninstall',(T 'cli.uninstall_agent_view_y_skip_confirmation')), @('version',(T 'cli.print_version')), @('help',(T 'cli.show_this_help')))
     foreach ($r in $rows) { Write-Host ('  agentview {0,-17}' -f $r[0]) -ForegroundColor White -NoNewline; Write-Host $r[1] }
 }
 function Invoke-AgentViewRestartIfRunning($Paths) {
     if ((Get-AgentViewRunState $Paths) -ne 'running') { return 0 }
-    Write-Host 'Khởi động lại agent-view để áp dụng…'
+    Write-Host (T 'cli.restarting_agent_view_to_apply_changes')
     [void](Stop-AgentViewApp $Paths)
-    if (Start-AgentViewApp $Paths) { Write-AgentViewStep ok 'Đã khởi động lại agent-view.'; return 0 }
-    Write-AgentViewStep fail 'Không khởi động lại được agent-view.' 'Thử: agentview up'; return 1
+    if (Start-AgentViewApp $Paths) { Write-AgentViewStep ok (T 'cli.restarted_agent_view'); return 0 }
+    Write-AgentViewStep fail (T 'cli.could_not_restart_agent_view') (T 'cli.try_agentview_up'); return 1
 }
 function Invoke-AgentViewUp($Paths) {
     switch (Get-AgentViewRunState $Paths) {
-        running { Write-AgentViewStep info 'agent-view đã chạy sẵn (icon ở khay cạnh đồng hồ).'; return 0 }
-        other { Write-AgentViewStep fail 'Một bản agent-view khác đang chạy (không phải bản cài ở đây).' 'Thoát bản đó (chuột phải icon khay → Thoát) rồi thử lại.'; return 1 }
+        running { Write-AgentViewStep info (T 'cli.agent_view_is_already_running_tray_icon_beside_the_clock'); return 0 }
+        other { Write-AgentViewStep fail (T 'cli.another_copy_of_agent_view_is_running_from_a_different_location') (T 'cli.quit_that_copy_right_click_its_tray_icon_quit_and_try_again'); return 1 }
     }
-    if (-not (Test-Path -LiteralPath $Paths.Launcher)) { Write-AgentViewStep fail ('Không thấy ' + $Paths.Launcher) 'Cài lại: agentview update'; return 1 }
-    if (Start-AgentViewApp $Paths) { Write-AgentViewStep ok 'Đã chạy agent-view — bấm icon cạnh đồng hồ để xem quota.'; return 0 }
-    Write-AgentViewStep fail 'agent-view không khởi động được.' 'Thử lại: agentview restart'; return 1
+    if (-not (Test-Path -LiteralPath $Paths.Launcher)) { Write-AgentViewStep fail ((T 'cli.cannot_find') + $Paths.Launcher) (T 'cli.reinstall_agentview_update'); return 1 }
+    if (Start-AgentViewApp $Paths) { Write-AgentViewStep ok (T 'cli.started_agent_view_click_the_tray_icon_to_view_quota'); return 0 }
+    Write-AgentViewStep fail (T 'cli.could_not_start_agent_view') (T 'cli.try_again_agentview_restart'); return 1
 }
 function Invoke-AgentViewDown($Paths) {
     $n = Stop-AgentViewApp $Paths
-    if ($n -gt 0) { Write-AgentViewStep ok 'Đã tắt agent-view.' } else { Write-AgentViewStep info 'agent-view không chạy.' }
+    if ($n -gt 0) { Write-AgentViewStep ok (T 'cli.stopped_agent_view') } else { Write-AgentViewStep info (T 'cli.agent_view_is_stopped') }
     return 0
 }
 function Invoke-AgentViewStatus($Paths, $Rest) {
     $app = Get-AgentViewAppInfo $Paths
     $json = @($Rest | Where-Object { $_ -match '^(?i)--?json$' }).Count -gt 0
-    if (-not $json) { Write-Host 'Đang đọc quota…' -ForegroundColor DarkGray }
+    if (-not $json) { Write-Host (T 'cli.reading_quota') -ForegroundColor DarkGray }
     . (Join-Path $PSScriptRoot 'Quota.ps1')
     $quotas = @(Get-AgentQuotas)
     if ($json) { Write-Host (ConvertTo-AgentViewStatusJson $quotas $app); return 0 }
@@ -294,14 +420,14 @@ function Invoke-AgentViewStatus($Paths, $Rest) {
     return 0
 }
 function Invoke-AgentViewToggle($Paths, [string]$What, $Rest) {
-    $label = @{ widget='Widget nổi'; autostart='Tự chạy khi đăng nhập' }[$What]
+    $label = @{ widget=(T 'cli.floating_widget'); autostart=(T 'cli.start_at_sign_in_37') }[$What]
     $current = if ($What -eq 'widget') { [bool](Get-AgentViewSettings $Paths.Settings).WidgetEnabled } else { Test-AgentViewAutostart $Paths }
-    if (@($Rest).Count -eq 0) { Write-Host ($label + ': ' + $(if ($current) { 'bật' } else { 'tắt' }) + '   (đổi: agentview ' + $What + ' on|off)'); return 0 }
+    if (@($Rest).Count -eq 0) { Write-Host ($label + ': ' + $(if ($current) { (T 'cli.on') } else { (T 'cli.off') }) + (T 'cli.change_agentview') + $What + ' on|off)'); return 0 }
     $on = ConvertFrom-AgentViewSwitch $Rest[0]
-    if ($null -eq $on) { Write-AgentViewStep fail ('Không hiểu "' + $Rest[0] + '".') ('Dùng: agentview ' + $What + ' on|off'); return 1 }
+    if ($null -eq $on) { Write-AgentViewStep fail ((T 'cli.unknown_value') + $Rest[0] + '".') ((T 'cli.use_agentview') + $What + ' on|off'); return 1 }
     if ($What -eq 'widget') { $s = Get-AgentViewSettings $Paths.Settings; $s.WidgetEnabled = $on; Save-AgentViewSettings $s $Paths.Settings }
     else { Set-AgentViewAutostart $Paths $on }
-    Write-AgentViewStep ok ($label + ': ' + $(if ($on) { 'bật' } else { 'tắt' }))
+    Write-AgentViewStep ok ($label + ': ' + $(if ($on) { (T 'cli.on') } else { (T 'cli.off') }))
     if ($on -eq $current) { return 0 }
     return (Invoke-AgentViewRestartIfRunning $Paths)
 }
@@ -322,11 +448,11 @@ function Invoke-AgentViewUpdate($Paths) {
         if (Test-Path -LiteralPath $source -PathType Container) { $installer = Join-Path $source 'installer.ps1' }
         else {
             [void][IO.Directory]::CreateDirectory($tempDir); $installer = Join-Path $tempDir 'installer.ps1'
-            Write-Host ('Tải trình cài từ ' + $source + ' …') -ForegroundColor DarkGray
+            Write-Host ((T 'cli.downloading_installer_from') + $source + ' …') -ForegroundColor DarkGray
             try { Invoke-WebRequest -UseBasicParsing -Uri ($source.TrimEnd('/') + '/installer.ps1') -OutFile $installer -ErrorAction Stop }
-            catch { Write-AgentViewStep fail 'Không tải được trình cài.' ($_.Exception.Message + ' — kiểm tra mạng rồi thử lại: agentview update'); return 1 }
+            catch { Write-AgentViewStep fail (T 'cli.could_not_download_the_installer') ($_.Exception.Message + (T 'cli.check_your_connection_and_retry_agentview_update')); return 1 }
         }
-        if (-not (Test-Path -LiteralPath $installer)) { Write-AgentViewStep fail ('Không thấy ' + $installer); return 1 }
+        if (-not (Test-Path -LiteralPath $installer)) { Write-AgentViewStep fail ((T 'cli.cannot_find') + $installer); return 1 }
         $argText = '-NoProfile -ExecutionPolicy Bypass -File "' + $installer + '" -Yes'
         if ((Get-AgentViewRunState $Paths) -ne 'running') { $argText += ' -NoStart' }
         $old = $env:AGENT_VIEW_SOURCE; $env:AGENT_VIEW_SOURCE = $source
@@ -336,32 +462,44 @@ function Invoke-AgentViewUpdate($Paths) {
 }
 function Invoke-AgentViewUninstall($Paths, $Rest) {
     if (-not (Test-AgentViewYesFlag $Rest)) {
-        if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { Write-AgentViewStep fail 'Cần xác nhận.' 'Chạy: agentview uninstall -y'; return 1 }
-        $answer = Read-Host 'Gỡ agent-view khỏi máy này? [y/N]'
-        if ($answer -notmatch '^(?i)(y|yes|c|có|co)$') { Write-Host 'Đã hủy, không gỡ gì.'; return 0 }
+        if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { Write-AgentViewStep fail (T 'cli.confirmation_required') (T 'cli.run_agentview_uninstall_y'); return 1 }
+        $answer = Read-Host (T 'cli.uninstall_agent_view_from_this_computer_y_n')
+        if ($answer -notmatch '^(?i)(y|yes|c|c\u00f3|co)$') { Write-Host (T 'cli.cancelled_nothing_was_removed'); return 0 }
     }
     $script = $Paths.Uninstall; if (-not (Test-Path -LiteralPath $script)) { $script = Join-Path $PSScriptRoot 'uninstall.ps1' }
-    if (-not (Test-Path -LiteralPath $script)) { Write-AgentViewStep fail 'Không thấy uninstall.ps1.' 'Cài lại bằng agentview update rồi thử lại.'; return 1 }
+    if (-not (Test-Path -LiteralPath $script)) { Write-AgentViewStep fail (T 'cli.cannot_find_uninstall_ps1') (T 'cli.reinstall_with_agentview_update_and_try_again'); return 1 }
     # Cli.ps1/uninstall.ps1 nằm trong thư mục sắp xóa: chạy bản sao ở %TEMP%; shim agentview.cmd được xóa trễ vì cmd còn đang đọc nó.
     $tempDir = Join-Path ([IO.Path]::GetTempPath()) ('agent-view-uninstall-' + [guid]::NewGuid().ToString('N'))
     [void][IO.Directory]::CreateDirectory($tempDir)
     Copy-Item -LiteralPath $script -Destination (Join-Path $tempDir 'uninstall.ps1') -Force
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $tempDir 'Cli.ps1') -Force
+    foreach ($dep in @('I18n.ps1','Settings.ps1','Format.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $dep) -Destination (Join-Path $tempDir $dep) -Force }
     $ver = Join-Path $PSScriptRoot 'Version.ps1'; if (Test-Path -LiteralPath $ver) { Copy-Item -LiteralPath $ver -Destination (Join-Path $tempDir 'Version.ps1') -Force }
     $code = Invoke-AgentViewChild ('-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $tempDir 'uninstall.ps1') + '" -DeferSelf')
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     return $code
 }
 function Invoke-AgentViewCli([string[]]$Argv, $Paths = (Get-AgentViewPaths)) {
+    Set-AgentViewLanguage (Get-AgentViewSettings $Paths.Settings).Language
     $cmd = Resolve-AgentViewCommand $Argv
     if ($cmd.Error) {
-        Write-Host ('agentview: không có lệnh "' + $Argv[0] + '".') -ForegroundColor Red
-        if ($cmd.Suggestion) { Write-Host ('Ý bạn là: agentview ' + $cmd.Suggestion + ' ?') -ForegroundColor Yellow }
-        Write-Host 'Gõ agentview help để xem danh sách lệnh.'
+        Write-Host ((T 'cli.agentview_unknown_command') + $Argv[0] + '".') -ForegroundColor Red
+        if ($cmd.Suggestion) { Write-Host ((T 'cli.did_you_mean_agentview') + $cmd.Suggestion + ' ?') -ForegroundColor Yellow }
+        Write-Host (T 'cli.type_agentview_help_for_available_commands')
         return 1
     }
     try {
         switch ($cmd.Command) {
+            lang {
+                if ($cmd.Rest.Count -eq 0) { Write-Host (Get-AgentViewLanguage); return 0 }
+                if ($cmd.Rest.Count -ne 1 -or $cmd.Rest[0] -notin @('auto','vi','en')) { Write-AgentViewStep fail (T 'cli.language_invalid'); return 1 }
+                $settings = Get-AgentViewSettings $Paths.Settings
+                $settings.Language = $cmd.Rest[0].ToLowerInvariant()
+                Save-AgentViewSettings $settings $Paths.Settings
+                Set-AgentViewLanguage $settings.Language
+                Write-Host (Get-AgentViewLanguage)
+                return (Invoke-AgentViewRestartIfRunning $Paths)
+            }
             help { Show-AgentViewHelp; return 0 }
             version { Write-Host ('agent-view ' + $script:AgentViewVersion); return 0 }
             up { return (Invoke-AgentViewUp $Paths) }
@@ -373,7 +511,7 @@ function Invoke-AgentViewCli([string[]]$Argv, $Paths = (Get-AgentViewPaths)) {
             update { return (Invoke-AgentViewUpdate $Paths) }
             uninstall { return (Invoke-AgentViewUninstall $Paths $cmd.Rest) }
         }
-    } catch { Write-AgentViewStep fail ('Lỗi khi chạy "agentview ' + $cmd.Command + '": ' + $_.Exception.Message); return 1 }
+    } catch { Write-AgentViewStep fail ((T 'cli.error_running_agentview') + $cmd.Command + '": ' + $_.Exception.Message); return 1 }
     return 1
 }
 

@@ -1,4 +1,5 @@
 ﻿. "$PSScriptRoot/../src/Format.ps1"
+Set-AgentViewLanguage vi
 Describe 'Shared quota formatting' {
     It 'formats relative boundaries and clamps the past' {
         $now=[datetime]'2026-11-07T12:00:00'

@@ -1,7 +1,60 @@
-﻿# Popup quota (thiết kế Bezel mục 02) — WPF trên Windows PowerShell 5.1, sống trong vòng message WinForms của tray.
+﻿. (Join-Path $PSScriptRoot 'I18n.ps1')
+Register-AgentViewStrings -Module 'popup' -Strings @{
+    en = @{
+        'refresh' = 'Refresh'
+        'settings' = 'Settings'
+        'left' = '{0} left'
+        'remaining' = 'remaining'
+        'retry' = 'Retry'
+
+        'no_data_yet' = 'No data yet'
+        'weekly_limit_only' = 'Weekly limit only'
+        '5_hour_limit_only' = '5-hour limit only'
+        'tightest_limit' = 'Tightest limit: {0}'
+        'reading_quota' = 'Reading quota…'
+        'no_fresh_data' = 'No fresh data'
+        'last_known_left' = 'Last known: {0}% left'
+        'no_data_available' = 'No data available.'
+        'cannot_read_quota' = 'Cannot read quota'
+        'loading' = 'Loading…'
+        'updating' = 'Updating…'
+        'not_updated_yet' = 'Not updated yet'
+        'updated' = 'Updated '
+        'errors' = ' · errors'
+        '5_hours' = '5 hours'
+        'week' = 'Week'
+    }
+    vi = @{
+        'refresh' = 'Làm mới'
+        'settings' = 'Cài đặt'
+        'left' = 'còn {0}'
+        'remaining' = 'còn lại'
+        'retry' = 'Thử lại'
+
+        'no_data_yet' = 'Chưa có dữ liệu'
+        'weekly_limit_only' = 'Chỉ giới hạn tuần'
+        '5_hour_limit_only' = 'Chỉ giới hạn 5 giờ'
+        'tightest_limit' = 'Giới hạn sát nhất: {0}'
+        'reading_quota' = 'Đang đọc quota…'
+        'no_fresh_data' = 'Không có số liệu mới'
+        'last_known_left' = 'Số liệu cuối: còn {0}%'
+        'no_data_available' = 'Không có số liệu.'
+        'cannot_read_quota' = 'Không đọc được quota'
+        'loading' = 'Đang tải…'
+        'updating' = 'Đang cập nhật…'
+        'not_updated_yet' = 'Chưa cập nhật'
+        'updated' = 'Cập nhật '
+        'errors' = ' · có lỗi'
+        '5_hours' = '5 giờ'
+        'week' = 'Tuần'
+    }
+}
+# Popup quota (thiết kế Bezel mục 02) — WPF trên Windows PowerShell 5.1, sống trong vòng message WinForms của tray.
 # Dot-source chỉ định nghĩa hàm. Hợp đồng: Show-/Update-/Hide-AgentViewPopup, Test-AgentViewPopupOpen.
 . (Join-Path $PSScriptRoot 'Ring.ps1')
 . (Join-Path $PSScriptRoot 'Format.ps1')
+. (Join-Path $PSScriptRoot 'History.ps1')
+. (Join-Path $PSScriptRoot 'Forecast.ps1')
 
 # ---------------------------------------------------------------- hằng số bố cục (khớp Spec 04)
 function Get-AgentViewPopupMetrics {
@@ -29,11 +82,12 @@ function Get-AgentViewPopupPlacement($WorkArea, [double]$WindowHeight) {
 # Empty-state display rows are separate from collection normalization.
 function Get-AgentViewEmptyRows {
     foreach ($p in @(@('claude', 'Claude Code'), @('codex', 'Codex'))) {
-        [pscustomobject]@{ Provider = $p[0]; Name = $p[1]; Ok = $false; Error = 'Chưa có dữ liệu'; FiveHourUsed = $null; WeekUsed = $null; FiveHourResetsAt = $null; WeekResetsAt = $null; FetchedAt = $null }
+        [pscustomobject]@{ Provider = $p[0]; Name = $p[1]; Ok = $false; Error = (T 'popup.no_data_yet'); FiveHourUsed = $null; WeekUsed = $null; FiveHourResetsAt = $null; WeekResetsAt = $null; FetchedAt = $null }
     }
 }
 
-function Get-AgentViewWindowModel($Used, $ResetsAt, [datetime]$Now) {
+# Samples: mẫu history đúng provider+cửa sổ; $null ⇒ không dự báo (ForecastKind 'unknown').
+function Get-AgentViewWindowModel($Used, $ResetsAt, [datetime]$Now, $Samples = $null, [string]$Window = '5h') {
     $rem = $null
     if ($null -ne $Used) { $rem = [int][math]::Max(0, [math]::Min(100, 100 - [double]$Used)) }
     $level = Get-QuotaLevel $rem
@@ -43,15 +97,23 @@ function Get-AgentViewWindowModel($Used, $ResetsAt, [datetime]$Now) {
         $a = Format-QuotaResetAbsolute ([datetime]$ResetsAt) $Now
         if ($a) { $abs = '· ' + $a }
     }
+    $fKind = 'unknown'; $fText = $null; $fAt = $null
+    if ($null -ne $Used -and $null -ne $Samples) {
+        $f = Get-AgentViewForecast -Samples $Samples -Used $Used -ResetsAt $ResetsAt -Window $Window -Now $Now
+        $fKind = $f.Kind; $fAt = $f.At
+        if ($fKind -ne 'unknown') { $fText = Format-AgentViewForecast $f $Now }
+    }
     [pscustomobject]@{
         Present = ($null -ne $Used); Remaining = $rem; Level = $level
         ValueText = $(if ($null -eq $rem) { '–' } else { "$rem%" })
         Rel = $rel; Abs = $abs
+        ForecastKind = $fKind; ForecastText = $fText; ForecastAt = $fAt
     }
 }
 
 # Mô hình hiển thị một thẻ provider: State 'ok'|'error'|'loading' + chuỗi đã dựng.
-function Get-AgentViewCardModel($Row, [switch]$Loading, [datetime]$Now = (Get-Date)) {
+# History: mẫu Get-AgentViewHistory (mọi provider) để dự báo; $null ⇒ không có dòng dự báo.
+function Get-AgentViewCardModel($Row, [switch]$Loading, [datetime]$Now = (Get-Date), $History = $null) {
     $name = $Row.Name; if (-not $name) { $name = [string]$Row.Provider }
     $value = Get-QuotaRemaining $Row
     $state = 'ok'
@@ -60,30 +122,36 @@ function Get-AgentViewCardModel($Row, [switch]$Loading, [datetime]$Now = (Get-Da
     $level = 'unk'; if ($state -eq 'ok') { $level = Get-QuotaLevel $value }
     $sub = ''
     switch ($state) {
-        'ok' { $w = Get-QuotaTightestWindow $Row; if ($null -eq $Row.FiveHourUsed) { $sub = "Chỉ giới hạn tuần" } elseif ($null -eq $Row.WeekUsed) { $sub = "Chỉ giới hạn 5 giờ" } elseif ($w) { $sub = "Giới hạn sát nhất: $w" } }
-        'loading' { $sub = 'Đang đọc quota…' }
-        'error' { $sub = 'Không có số liệu mới' }
+        'ok' { $w = Get-QuotaTightestWindow $Row; if ($null -eq $Row.FiveHourUsed) { $sub = (T 'popup.weekly_limit_only') } elseif ($null -eq $Row.WeekUsed) { $sub = (T 'popup.5_hour_limit_only') } elseif ($w) { $sub = (T 'popup.tightest_limit' -Args @($w)) } }
+        'loading' { $sub = (T 'popup.reading_quota') }
+        'error' { $sub = (T 'popup.no_fresh_data') }
     }
     $stale = $null
     if ($state -eq 'error' -and $null -ne $value) {
-        $stale = "Số liệu cuối: còn $value%"
+        $stale = (T 'popup.last_known_left' -Args @($value))
         if ($Row.FetchedAt) { $stale += ' · ' + (Format-QuotaAgo ([datetime]$Row.FetchedAt) $Now) }
     }
     $detail = [string]$Row.Error
-    if (-not $detail -and $state -eq 'error') { $detail = 'Không có số liệu.' }
+    if (-not $detail -and $state -eq 'error') { $detail = (T 'popup.no_data_available') }
+    $fiveSamples = $null; $weekSamples = $null
+    if ($null -ne $History -and $Row.Ok -eq $true) {
+        $provider = [string]$Row.Provider
+        $fiveSamples = @(@($History) | Where-Object { $null -ne $_ -and $_.p -eq $provider -and $_.w -eq '5h' })
+        $weekSamples = @(@($History) | Where-Object { $null -ne $_ -and $_.p -eq $provider -and $_.w -eq 'week' })
+    }
     [pscustomobject]@{
         Provider = [string]$Row.Provider; Name = $name; State = $state; Value = $value; Level = $level
         Sub = $sub
         NumText = $(switch ($state) { 'ok' { [string]$value } 'loading' { '00' } default { '–' } })
-        Five = Get-AgentViewWindowModel $Row.FiveHourUsed $Row.FiveHourResetsAt $Now
-        Week = Get-AgentViewWindowModel $Row.WeekUsed $Row.WeekResetsAt $Now
-        ErrTitle = 'Không đọc được quota'; ErrDetail = $detail; Stale = $stale
+        Five = Get-AgentViewWindowModel $Row.FiveHourUsed $Row.FiveHourResetsAt $Now $fiveSamples '5h'
+        Week = Get-AgentViewWindowModel $Row.WeekUsed $Row.WeekResetsAt $Now $weekSamples 'week'
+        ErrTitle = (T 'popup.cannot_read_quota'); ErrDetail = $detail; Stale = $stale
     }
 }
 
 # Chip trạng thái theo mức tệ nhất của các provider đọc được.
 function Get-AgentViewStatusModel($Rows, [switch]$Loading) {
-    if ($Loading) { return [pscustomobject]@{ Level = 'unk'; Text = 'Đang tải…' } }
+    if ($Loading) { return [pscustomobject]@{ Level = 'unk'; Text = (T 'popup.loading') } }
     $vals = @(foreach ($r in $Rows) { if ($r.Ok) { $v = Get-QuotaRemaining $r; if ($null -ne $v) { $v } } })
     $level = 'unk'
     if ($vals.Count) { $level = Get-QuotaLevel (($vals | Measure-Object -Minimum).Minimum) }
@@ -92,11 +160,11 @@ function Get-AgentViewStatusModel($Rows, [switch]$Loading) {
 
 function Get-AgentViewFooterModel($Rows, [switch]$Loading, [datetime]$Now = (Get-Date)) {
     $hasError = @($Rows | Where-Object { -not $_.Ok }).Count -gt 0
-    if ($Loading) { return [pscustomobject]@{ Text = 'Đang cập nhật…'; Stale = $false } }
+    if ($Loading) { return [pscustomobject]@{ Text = (T 'popup.updating'); Stale = $false } }
     $times = @($Rows | Where-Object { $_.FetchedAt } | ForEach-Object { [datetime]$_.FetchedAt })
-    $text = 'Chưa cập nhật'
-    if ($times.Count) { $text = 'Cập nhật ' + (Format-QuotaAgo (($times | Measure-Object -Maximum).Maximum) $Now) }
-    if ($hasError) { $text += ' · có lỗi' }
+    $text = (T 'popup.not_updated_yet')
+    if ($times.Count) { $text = (T 'popup.updated') + (Format-QuotaAgo (($times | Measure-Object -Maximum).Maximum) $Now) }
+    if ($hasError) { $text += (T 'popup.errors') }
     [pscustomobject]@{ Text = $text; Stale = $hasError }
 }
 
@@ -109,7 +177,7 @@ function Expand-AgentViewXaml([string]$Xaml, $Theme) {
 function Get-AgentViewPopupState {
     $st = [AppDomain]::CurrentDomain.GetData('agent-view.popup')
     if ($null -eq $st) {
-        $st = @{ Window = $null; Rows = @(); Loading = $false; OnRefresh = $null; OnRetry = $null
+        $st = @{ Window = $null; Rows = @(); Loading = $false; OnRefresh = $null; OnRetry = $null; OnSettings = $null
                  Closing = $false; DeactivatedAt = 0; Cards = @{}; WorkArea = $null }
         [AppDomain]::CurrentDomain.SetData('agent-view.popup', $st)
     }
@@ -172,14 +240,14 @@ function Get-AgentViewPopupXaml {
       <TextBlock x:Name="StatusText" Margin="6,0,0,0" FontSize="11.5" Foreground="@@av-text-2@@" VerticalAlignment="Center"/>
      </StackPanel>
     </Border>
-    <Button x:Name="RefreshBtn" Grid.Column="3" Margin="10,0,0,0" Style="{StaticResource IconBtn}" ToolTip="Làm mới">
+    <Button x:Name="RefreshBtn" Grid.Column="3" Margin="10,0,0,0" Style="{StaticResource IconBtn}" ToolTip="$(T 'popup.refresh')">
      <Canvas Width="16" Height="16" RenderTransformOrigin="0.5,0.5">
       <Canvas.RenderTransform><RotateTransform x:Name="RefreshRot"/></Canvas.RenderTransform>
       <Path Data="M13.5,8 A5.5,5.5 0 1 1 11.9,4.1 M13.5,2.5 V5.5 H10.5" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
      </Canvas>
     </Button>
-    <Button x:Name="SettingsBtn" Grid.Column="4" Margin="10,0,0,0" Style="{StaticResource IconBtn}" ToolTip="Cài đặt">
+    <Button x:Name="SettingsBtn" Grid.Column="4" Margin="10,0,0,0" Style="{StaticResource IconBtn}" ToolTip="$(T 'popup.settings')">
      <Canvas Width="16" Height="16">
       <Path StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
             Data="M10.2,8 A2.2,2.2 0 1 1 5.8,8 A2.2,2.2 0 1 1 10.2,8 M8,1.8 V3.4 M8,12.6 V14.2 M14.2,8 H12.6 M3.4,8 H1.8 M12.4,3.6 L11.3,4.7 M4.7,11.3 L3.6,12.4 M12.4,12.4 L11.3,11.3 M4.7,4.7 L3.6,3.6"/>
@@ -200,11 +268,12 @@ function Get-AgentViewPopupXaml {
 function Get-AgentViewMeterXaml([string]$Prefix, [string]$Label) {
     $m = Get-AgentViewPopupMetrics
     $t30 = $m.BarWidth * 0.3; $t10 = $m.BarWidth * 0.1
+    $valueRun = "<Run x:Name=`"${Prefix}Value`" FontWeight=`"SemiBold`" Foreground=`"@@av-text@@`"/>"
     @"
 <StackPanel x:Name="${Prefix}Block">
  <Grid Margin="0,0,0,5">
   <TextBlock Text="$Label" FontSize="12" Foreground="@@av-text-2@@"/>
-  <TextBlock x:Name="${Prefix}Line" HorizontalAlignment="Right" FontSize="12" Foreground="@@av-text-2@@" Typography.NumeralAlignment="Tabular">còn <Run x:Name="${Prefix}Value" FontWeight="SemiBold" Foreground="@@av-text@@"/></TextBlock>
+  <TextBlock x:Name="${Prefix}Line" HorizontalAlignment="Right" FontSize="12" Foreground="@@av-text-2@@" Typography.NumeralAlignment="Tabular">$(T 'popup.left' -Args @($valueRun))</TextBlock>
  </Grid>
  <Grid Height="6" ClipToBounds="True">
   <Border x:Name="${Prefix}Track" CornerRadius="3" Background="@@av-track@@"/>
@@ -221,14 +290,15 @@ function Get-AgentViewMeterXaml([string]$Prefix, [string]$Label) {
   <TextBlock x:Name="${Prefix}Rel" Margin="5,0,0,0" FontSize="11.5" Foreground="@@av-text-2@@" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center"/>
   <TextBlock x:Name="${Prefix}Abs" Margin="5,0,0,0" FontSize="11.5" Foreground="@@av-text-3@@" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center"/>
  </StackPanel>
+ <TextBlock x:Name="${Prefix}Forecast" Visibility="Collapsed" Margin="16,3,0,0" FontSize="11.5" Foreground="@@av-text-3@@" Typography.NumeralAlignment="Tabular" TextTrimming="CharacterEllipsis"/>
 </StackPanel>
 "@
 }
 
 function Get-AgentViewCardXaml {
     $m = Get-AgentViewPopupMetrics
-    $five = Get-AgentViewMeterXaml 'Five' '5 giờ'
-    $week = Get-AgentViewMeterXaml 'Week' 'Tuần'
+    $five = Get-AgentViewMeterXaml 'Five' (T 'popup.5_hours')
+    $week = Get-AgentViewMeterXaml 'Week' (T 'popup.week')
     @"
 <Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
   CornerRadius="10" BorderThickness="1" BorderBrush="@@av-stroke-soft@@" Background="@@av-surface@@" Padding="12,12,14,12"
@@ -246,7 +316,7 @@ function Get-AgentViewCardXaml {
     <Border x:Name="NumWrap" CornerRadius="6" HorizontalAlignment="Right">
      <TextBlock FontFamily="$($m.FontDisplay)" FontWeight="SemiBold" Typography.NumeralAlignment="Tabular" LineStackingStrategy="BlockLineHeight" LineHeight="30"><Run x:Name="BigNum" FontSize="30"/><Run x:Name="BigPct" Text="%" FontSize="15"/></TextBlock>
     </Border>
-    <TextBlock Text="còn lại" HorizontalAlignment="Right" Margin="0,4,0,0" FontSize="11" Foreground="@@av-text-3@@"/>
+    <TextBlock Text="$(T 'popup.remaining')" HorizontalAlignment="Right" Margin="0,4,0,0" FontSize="11" Foreground="@@av-text-3@@"/>
    </StackPanel>
   </Grid>
   <StackPanel x:Name="Meters" Margin="0,12,0,0">
@@ -265,7 +335,7 @@ function Get-AgentViewCardXaml {
      <TextBlock x:Name="ErrDetail" Margin="0,2,0,0" FontSize="12" Foreground="@@av-text-2@@" TextWrapping="Wrap"/>
      <TextBlock x:Name="ErrStale" Margin="0,2,0,0" FontSize="11.5" Foreground="@@av-text-3@@" TextWrapping="Wrap" Typography.NumeralAlignment="Tabular"/>
     </StackPanel>
-    <Button x:Name="RetryBtn" Grid.Column="2" Content="Thử lại" VerticalAlignment="Top"/>
+    <Button x:Name="RetryBtn" Grid.Column="2" Content="$(T 'popup.retry')" VerticalAlignment="Top"/>
    </Grid>
   </Border>
  </StackPanel>
@@ -328,6 +398,11 @@ function New-AgentViewPopupWindow {
         $s.Ui.RefreshRot.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $spin)
         if ($s.OnRefresh) { try { & $s.OnRefresh } catch { } }
     })
+    $ui.SettingsBtn.Add_Click({
+        $s = Get-AgentViewPopupState
+        $cb = $s.OnSettings
+        if ($cb) { Hide-AgentViewPopup; try { & $cb } catch { } }
+    })
     $footTimer = New-Object System.Windows.Threading.DispatcherTimer
     $footTimer.Interval = [TimeSpan]::FromSeconds(20)
     $footTimer.Add_Tick({ Update-AgentViewPopupText })
@@ -341,8 +416,8 @@ function New-AgentViewCard([string]$Provider) {
     $root = [System.Windows.Markup.XamlReader]::Parse((Expand-AgentViewXaml (Get-AgentViewCardXaml) $st.Theme))
     $c = @{ Root = $root; Provider = $Provider }
     foreach ($n in 'Shift', 'RingHost', 'NameText', 'SubText', 'NumWrap', 'BigNum', 'BigPct', 'Meters', 'ErrBox', 'ErrTitle', 'ErrDetail', 'ErrStale', 'RetryBtn',
-                   'FiveBlock', 'WeekBlock', 'MeterGap', 'FiveLine', 'FiveValue', 'FiveTrack', 'FiveFill', 'FiveTicks', 'FiveReset', 'FiveRel', 'FiveAbs',
-                   'WeekLine', 'WeekValue', 'WeekTrack', 'WeekFill', 'WeekTicks', 'WeekReset', 'WeekRel', 'WeekAbs') {
+                   'FiveBlock', 'WeekBlock', 'MeterGap', 'FiveLine', 'FiveValue', 'FiveTrack', 'FiveFill', 'FiveTicks', 'FiveReset', 'FiveRel', 'FiveAbs', 'FiveForecast',
+                   'WeekLine', 'WeekValue', 'WeekTrack', 'WeekFill', 'WeekTicks', 'WeekReset', 'WeekRel', 'WeekAbs', 'WeekForecast') {
         $c[$n] = $root.FindName($n)
     }
     $icon = $null; if (@('claude', 'codex') -contains $Provider) { $icon = $Provider }
@@ -370,22 +445,41 @@ function New-AgentViewDoubleAnimation([double]$From, [double]$To, [double]$Ms, [
     $a
 }
 
+# Màu dòng dự báo: 'runout' ⇒ crit nếu cửa sổ đã crit, ngược lại warn; 'enough' ⇒ chữ phụ; 'unknown' ⇒ ẩn.
+function Get-AgentViewForecastColorKey($Window) {
+    switch ($Window.ForecastKind) {
+        'runout' { if ($Window.Level -eq 'crit') { return 'crit' }; return 'warn' }
+        'enough' { return 'av-text-3' }
+    }
+    return $null
+}
+
+function Set-AgentViewForecastLine($Block, $Window) {
+    $key = Get-AgentViewForecastColorKey $Window
+    if (-not $key -or -not $Window.ForecastText) { $Block.Text = ''; $Block.Visibility = 'Collapsed'; return }
+    $st = Get-AgentViewPopupState
+    $Block.Text = [string]$Window.ForecastText
+    $Block.Foreground = ConvertTo-AgentViewBrush $st.Theme[$key]
+    $Block.Visibility = 'Visible'
+}
+
 function Set-AgentViewMeter($Card, [string]$Prefix, $Window, [string]$State, [string]$Mode) {
     $st = Get-AgentViewPopupState
     $m = Get-AgentViewPopupMetrics
     $Card["${Prefix}Value"].Text = $Window.ValueText
     $Card["${Prefix}Rel"].Text = [string]$Window.Rel
     $Card["${Prefix}Abs"].Text = [string]$Window.Abs
+    Set-AgentViewForecastLine $Card["${Prefix}Forecast"] $Window
     $fill = $Card["${Prefix}Fill"]
     if ($State -eq 'loading') {
         $Card["${Prefix}Track"].Background = $st.Shimmer.Brush
         $fill.Visibility = 'Hidden'; $Card["${Prefix}Ticks"].Visibility = 'Hidden'
-        $Card["${Prefix}Line"].Opacity = 0.35; $Card["${Prefix}Reset"].Opacity = 0.35
+        $Card["${Prefix}Line"].Opacity = 0.35; $Card["${Prefix}Reset"].Opacity = 0.35; $Card["${Prefix}Forecast"].Opacity = 0.35
         return
     }
     $Card["${Prefix}Track"].Background = ConvertTo-AgentViewBrush $st.Theme['av-track']
     $fill.Visibility = 'Visible'; $Card["${Prefix}Ticks"].Visibility = 'Visible'
-    $Card["${Prefix}Line"].Opacity = 1; $Card["${Prefix}Reset"].Opacity = 1
+    $Card["${Prefix}Line"].Opacity = 1; $Card["${Prefix}Reset"].Opacity = 1; $Card["${Prefix}Forecast"].Opacity = 1
     $colors = Get-AgentViewLevelColors $Window.Level $st.Theme
     $grad = New-Object System.Windows.Media.LinearGradientBrush ((ConvertTo-AgentViewColor $colors.Lv), (ConvertTo-AgentViewColor $colors.Hi), 0.0)
     $grad.Freeze(); $fill.Background = $grad
@@ -460,6 +554,13 @@ function Set-AgentViewShimmer([bool]$On) {
     $sh.Running = $On
 }
 
+# Đọc history MỘT lần cho mỗi lần dựng popup/widget (không ném; lỗi ⇒ mảng rỗng).
+function Get-AgentViewPopupHistory {
+    $samples = @()
+    try { $samples = @(Get-AgentViewHistory) } catch { }
+    return ,$samples
+}
+
 # Dựng lại nội dung từ $st.Rows. Mode như Set-AgentViewCard.
 function Update-AgentViewPopupView([string]$Mode = 'update') {
     $st = Get-AgentViewPopupState
@@ -468,6 +569,8 @@ function Update-AgentViewPopupView([string]$Mode = 'update') {
     $rows = @(ConvertTo-QuotaRows $st.Rows)
     if (-not $rows.Count) { $rows = @(Get-AgentViewEmptyRows) }
     $now = Get-Date
+    $history = Get-AgentViewPopupHistory
+    $st.Ui.SettingsBtn.Visibility = $(if ($st.OnSettings) { 'Visible' } else { 'Collapsed' })
     $order = @()
     foreach ($row in $rows) {
         $key = [string]$row.Provider; if (-not $key) { $key = [string]$row.Name }
@@ -475,7 +578,7 @@ function Update-AgentViewPopupView([string]$Mode = 'update') {
         $order += $key
         if (-not $st.Cards.ContainsKey($key)) { $st.Cards[$key] = New-AgentViewCard $key }
         $cardMode = $Mode; if (($st.Order -notcontains $key) -and $Mode -eq 'update') { $cardMode = 'open' }
-        Set-AgentViewCard $st.Cards[$key] (Get-AgentViewCardModel $row -Loading:$st.Loading -Now $now) $cardMode
+        Set-AgentViewCard $st.Cards[$key] (Get-AgentViewCardModel $row -Loading:$st.Loading -Now $now -History $history) $cardMode
     }
     $panel = $st.Ui.Cards
     $panel.Children.Clear()
@@ -520,11 +623,12 @@ function Test-AgentViewPopupOpen {
 }
 
 function Show-AgentViewPopup {
-    param($Rows, [switch]$Loading, [scriptblock]$OnRefresh, [scriptblock]$OnRetry)
+    param($Rows, [switch]$Loading, [scriptblock]$OnRefresh, [scriptblock]$OnRetry, [scriptblock]$OnSettings)
     $st = Get-AgentViewPopupState
     $st.Rows = $Rows; $st.Loading = [bool]$Loading
     if ($OnRefresh) { $st.OnRefresh = $OnRefresh }
     if ($OnRetry) { $st.OnRetry = $OnRetry }
+    $st.OnSettings = $OnSettings      # thiếu ⇒ nút ⚙ ẩn
     if (Test-AgentViewPopupOpen) { Hide-AgentViewPopup; return }
     $m = Get-AgentViewPopupMetrics
     # Bấm icon khay khi popup đang mở: popup mất focus (Deactivated) trước khi click tới → coi là đóng.

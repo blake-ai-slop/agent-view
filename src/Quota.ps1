@@ -1,4 +1,17 @@
-﻿# Đọc quota đã dùng (cửa sổ 5h + tuần) và giờ reset của Claude Code và Codex. Windows PowerShell 5.1.
+﻿. (Join-Path $PSScriptRoot 'I18n.ps1')
+Register-AgentViewStrings -Module 'quota' -Strings @{
+    en = @{
+        'cannot_read_quota' = 'cannot read quota'
+        'not_installed' = 'not installed'
+        'timed_out' = 'timed out'
+    }
+    vi = @{
+        'cannot_read_quota' = 'không đọc được'
+        'not_installed' = 'chưa cài'
+        'timed_out' = 'hết thời gian'
+    }
+}
+# Đọc quota đã dùng (cửa sổ 5h + tuần) và giờ reset của Claude Code và Codex. Windows PowerShell 5.1.
 # Dot-source không có side effect: chỉ định nghĩa hàm. Dữ liệu thô có accountUuid/email/gói: chỉ giữ % + giờ reset,
 # không log, không ghi file. Không đọc credentials, không gọi lượt model.
 . (Join-Path $PSScriptRoot 'Process.ps1')
@@ -218,7 +231,7 @@ function Get-ClaudeConfigPath([string]$ConfigDir, [string]$HomeDir) {
 
 function New-AgentQuota([string]$Provider, [string]$Name, $Data, [string]$ErrorText, $FetchedAt) {
   $ok = ($null -ne $Data -and ($null -ne $Data.FiveHour -or $null -ne $Data.Week))
-  if (-not $ok -and -not $ErrorText) { $ErrorText = 'không đọc được' }
+  if (-not $ok -and -not $ErrorText) { $ErrorText = (T 'quota.cannot_read_quota') }
   if ($ok) { $ErrorText = $null }
   $q = [pscustomobject]@{
     Provider = $Provider; Name = $Name; Ok = [bool]$ok; Error = $ErrorText
@@ -307,9 +320,9 @@ function Get-ClaudeQuota([hashtable]$Ops) {
       $cache = Reset-ClaudeCachedWindows $cache $now
       return New-AgentQuota 'claude' $name $cache $null $cache.FetchedAt
     }
-    $err = 'không đọc được'
+    $err = (T 'quota.cannot_read_quota')
     $src = & $Ops.Find 'claude'
-    if (-not $src) { $err = 'chưa cài' }
+    if (-not $src) { $err = (T 'quota.not_installed') }
     else {
       $key = "$src|$path"
       $attempt = $false
@@ -328,7 +341,7 @@ function Get-ClaudeQuota([hashtable]$Ops) {
         $inv = Get-AgentCliInvocation $src @('-p', '/usage', '--output-format', 'json', '--no-session-persistence')
         $r = $null
         try { $r = & $Ops.Run $inv @() $null 12000 } catch {}
-        if ($r -and $r.TimedOut) { $err = 'hết thời gian' }
+        if ($r -and $r.TimedOut) { $err = (T 'quota.timed_out') }
         elseif ($r -and $r.ExitCode -eq 0 -and (Get-ClaudeUsageEnvelope $r.Lines)) {
           # CLI có thể không ghi lại nếu chưa qua TTL nội bộ; không làm mới tuổi giả.
           $updated = $null
@@ -345,7 +358,7 @@ function Get-ClaudeQuota([hashtable]$Ops) {
     }
     return New-AgentQuota 'claude' $name $null $err $now
   }
-  catch { return New-AgentQuota 'claude' $name $null 'không đọc được' (Get-Date) }
+  catch { return New-AgentQuota 'claude' $name $null (T 'quota.cannot_read_quota') (Get-Date) }
 }
 
 function Get-CodexQuota([hashtable]$Ops) {
@@ -353,17 +366,17 @@ function Get-CodexQuota([hashtable]$Ops) {
   try {
     $now = & $Ops.Now
     $src = & $Ops.Find 'codex'
-    if (-not $src) { return New-AgentQuota 'codex' $name $null 'chưa cài' $now }
+    if (-not $src) { return New-AgentQuota 'codex' $name $null (T 'quota.not_installed') $now }
     $inv = Get-AgentCliInvocation $src @('app-server')
     $r = & $Ops.Run $inv @(Get-CodexHello) { param($line) Get-CodexStep $line } 12000
     $at = & $Ops.Now
     $data = $null
     if ($r) { $data = ConvertFrom-CodexReply $r.Lines }
     if ($data) { return New-AgentQuota 'codex' $name $data $null $at }
-    if ($r -and $r.TimedOut) { return New-AgentQuota 'codex' $name $null 'hết thời gian' $at }
-    return New-AgentQuota 'codex' $name $null 'không đọc được' $at
+    if ($r -and $r.TimedOut) { return New-AgentQuota 'codex' $name $null (T 'quota.timed_out') $at }
+    return New-AgentQuota 'codex' $name $null (T 'quota.cannot_read_quota') $at
   }
-  catch { return New-AgentQuota 'codex' $name $null 'không đọc được' (Get-Date) }
+  catch { return New-AgentQuota 'codex' $name $null (T 'quota.cannot_read_quota') (Get-Date) }
 }
 
 # Quota của mọi provider, thứ tự cố định claude, codex: phát 2 object ra pipeline, không ném lỗi.

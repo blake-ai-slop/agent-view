@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.0
+
+### Added
+
+- English and Vietnamese UI for the app, popup, widget, tray menu, terminal command, and installer. The language follows Windows by default; `agentview lang auto|vi|en` changes it.
+- Low-quota notifications: a tray notification when a 5-hour or weekly window drops to 30% and 10% left (once per threshold per window cycle), and when a window that ran low is full again. Several alerts at once are combined into one notification.
+- Run-out forecast: the popup shows when each window is expected to run out at the current pace, or that it is enough until reset; the widget adds the run-out time for the tightest window. Forecasts use a small local history of usage percentages (kept for 8 days).
+- Settings window (gear button in the popup, or **Settings…** in the tray menu): language, refresh interval (1, 2, or 5 minutes), notifications and thresholds, widget, start at sign-in, and hiding providers.
+
 ## v0.1.1
 
 ### Fixed
