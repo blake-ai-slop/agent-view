@@ -116,7 +116,7 @@ function Get-AgentViewWindowModel($Used, $ResetsAt, [datetime]$Now, $Samples = $
 }
 
 # Mô hình hiển thị một thẻ provider: State 'ok'|'error'|'loading' + chuỗi đã dựng.
-# History: mẫu Get-AgentViewHistory (mọi provider) để dự báo; $null ⇒ không có dòng dự báo.
+# History: mẫu Get-AgentViewHistory (mọi provider) hoặc index Get-AgentViewHistoryIndex ('p|w' ⇒ mẫu) để dự báo; $null ⇒ không có dòng dự báo.
 function Get-AgentViewCardModel($Row, [switch]$Loading, [datetime]$Now = (Get-Date), $History = $null) {
     $name = $Row.Name; if (-not $name) { $name = [string]$Row.Provider }
     $value = Get-QuotaRemaining $Row
@@ -140,8 +140,17 @@ function Get-AgentViewCardModel($Row, [switch]$Loading, [datetime]$Now = (Get-Da
     $fiveSamples = $null; $weekSamples = $null
     if ($null -ne $History -and $Row.Ok -eq $true) {
         $provider = [string]$Row.Provider
-        $fiveSamples = @(@($History) | Where-Object { $null -ne $_ -and $_.p -eq $provider -and $_.w -eq '5h' })
-        $weekSamples = @(@($History) | Where-Object { $null -ne $_ -and $_.p -eq $provider -and $_.w -eq 'week' })
+        if ($History -is [System.Collections.IDictionary]) {
+            $fiveSamples = $History["$provider|5h"]; if ($null -eq $fiveSamples) { $fiveSamples = @() }
+            $weekSamples = $History["$provider|week"]; if ($null -eq $weekSamples) { $weekSamples = @() }
+        } else {
+            $five = New-Object System.Collections.Generic.List[object]; $week = New-Object System.Collections.Generic.List[object]
+            foreach ($s in @($History)) {
+                if ($null -eq $s -or $s.p -ne $provider) { continue }
+                if ($s.w -eq '5h') { $five.Add($s) } elseif ($s.w -eq 'week') { $week.Add($s) }
+            }
+            $fiveSamples = $five.ToArray(); $weekSamples = $week.ToArray()
+        }
     }
     [pscustomobject]@{
         Provider = [string]$Row.Provider; Name = $name; State = $state; Value = $value; Level = $level
@@ -571,11 +580,13 @@ function Set-AgentViewShimmer([bool]$On) {
     $sh.Running = $On
 }
 
-# Đọc history MỘT lần cho mỗi lần dựng popup/widget (không ném; lỗi ⇒ mảng rỗng).
+# Index history từ cache bộ nhớ (History.ps1; không đọc file nếu file không đổi) cho mỗi lần dựng popup/widget.
+# Không ném; lỗi ⇒ index rỗng.
 function Get-AgentViewPopupHistory {
-    $samples = @()
-    try { $samples = @(Get-AgentViewHistory) } catch { }
-    return ,$samples
+    $index = @{}
+    try { $index = Get-AgentViewHistoryIndex } catch { }
+    if ($null -eq $index) { $index = @{} }
+    return $index
 }
 
 # Dựng lại nội dung từ $st.Rows. Mode như Set-AgentViewCard.
@@ -724,7 +735,7 @@ function Hide-AgentViewPopup {
     $fade = New-AgentViewDoubleAnimation 1 0 $out 'CubicIn'
     $fade.Add_Completed({
         $s = Get-AgentViewPopupState
-        if ($s.Closing -and $s.Window) { $s.Window.Hide(); $s.Closing = $false }
+        if ($s.Closing -and $s.Window) { $s.Window.Hide(); $s.Closing = $false; if (Get-Command Request-AgentViewMemoryTrim -ErrorAction SilentlyContinue) { Request-AgentViewMemoryTrim } }
     })
     $ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewDoubleAnimation 0 12 $out 'CubicIn'))
     $ui.ShellScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, (New-AgentViewDoubleAnimation 1 0.985 $out 'CubicIn'))

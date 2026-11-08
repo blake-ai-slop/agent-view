@@ -138,6 +138,36 @@ function New-QuotaIcon($Rows, [switch]$Loading, [int]$Frame = 0) {
 function Initialize-AgentViewTrayNative {
     if (-not ('AgentView.Native' -as [type])) { Add-Type 'namespace AgentView { public static class Native { [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool DestroyIcon(System.IntPtr h); } }' }
 }
+# Dọn bộ nhớ lúc rảnh (v0.2.2): GC rồi trả working set cho OS. Chạy trễ qua timer UI (sau refresh/đóng popup/toast,
+# lúc không có hoạt ảnh), tối đa 1 lần/phút. Lỗi bị nuốt.
+if ($null -eq $script:AgentViewMemoryTrim) { $script:AgentViewMemoryTrim = @{ Timer = $null; Last = [datetime]::MinValue; MinSeconds = 60; Count = 0 } }
+function Invoke-AgentViewMemoryTrim([switch]$Force) {
+    $t = $script:AgentViewMemoryTrim
+    $now = Get-Date
+    if (-not $Force -and $now -ge $t.Last -and ($now - $t.Last).TotalSeconds -lt $t.MinSeconds) { return $false }
+    $t.Last = $now
+    [GC]::Collect(); [GC]::WaitForPendingFinalizers(); [GC]::Collect()
+    try {
+        if (-not ('AgentView.Memory' -as [type])) { Add-Type 'namespace AgentView { public static class Memory { [System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern bool SetProcessWorkingSetSize(System.IntPtr process, System.IntPtr min, System.IntPtr max); } }' }
+        [void][AgentView.Memory]::SetProcessWorkingSetSize([IntPtr](-1), [IntPtr](-1), [IntPtr](-1))   # -1 = tiến trình hiện tại
+    } catch { }
+    $t.Count++
+    return $true
+}
+function Request-AgentViewMemoryTrim([int]$DelayMs = 3000) {
+    $t = $script:AgentViewMemoryTrim
+    try {
+        if (-not $t.Timer) {
+            $t.Timer = New-Object Windows.Forms.Timer
+            $t.Timer.Add_Tick({ $this.Stop(); try { [void](Invoke-AgentViewMemoryTrim) } catch { } })
+        }
+        $t.Timer.Stop(); $t.Timer.Interval = [math]::Max(1, $DelayMs); $t.Timer.Start()
+    } catch { }
+}
+function Stop-AgentViewMemoryTrim {
+    $t = $script:AgentViewMemoryTrim
+    if ($t.Timer) { try { $t.Timer.Stop(); $t.Timer.Dispose() } catch { }; $t.Timer = $null }
+}
 # Đọc một trường settings (pscustomobject hoặc hashtable); thiếu/null ⇒ mặc định. Settings.ps1 có thể chưa có trường mới.
 function Get-AgentViewSettingValue($Settings, [string]$Name, $Default) {
     if ($null -eq $Settings) { return $Default }
@@ -355,6 +385,22 @@ function Update-AgentViewTrayIcon($Tray) {
     $Tray.Notify.Icon = New-QuotaIcon $s.View -Loading:$s.Loading -Frame $s.Frame
     if ($old) { $old.Dispose() }
 }
+# Runspace refresh quota dùng chung giữa các lần refresh (State.Runspace): tạo 1 lần, Quota.ps1 nạp 1 lần trong đó.
+# Không ở trạng thái Opened (hỏng/đã đóng) ⇒ bỏ và tạo mới.
+function Get-AgentViewRefreshRunspace($State) {
+    $rs = $State.Runspace
+    if ($rs -and $rs.RunspaceStateInfo.State -ne [Management.Automation.Runspaces.RunspaceState]::Opened) { Reset-AgentViewRefreshRunspace $State; $rs = $null }
+    if (-not $rs) {
+        $rs = [Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $rs.Open()
+        $State.Runspace = $rs
+    }
+    return $rs
+}
+function Reset-AgentViewRefreshRunspace($State) {
+    if ($State.Runspace) { try { $State.Runspace.Dispose() } catch { } }
+    $State.Runspace = $null
+}
 function Start-AgentViewRefresh($Tray) {
     $s = $Tray.State
     if ($null -ne $s.Worker) { return }
@@ -362,11 +408,18 @@ function Start-AgentViewRefresh($Tray) {
     if ($Tray.Animation) { $Tray.Animation.Interval = 125; $Tray.Animation.Start() }
     Update-AgentViewPopup -Rows $s.View -Loading
     Update-AgentViewWidget -Rows $s.View -Loading
+    $quotaPath = $s.QuotaPath; if (-not $quotaPath) { $quotaPath = Join-Path $PSScriptRoot 'Quota.ps1' }
     $s.Worker = [PowerShell]::Create()
+    try { $s.Worker.Runspace = Get-AgentViewRefreshRunspace $s } catch { Reset-AgentViewRefreshRunspace $s }   # lỗi ⇒ runspace riêng của PowerShell như cũ
+    # Script chạy ở scope global của runspace ⇒ Quota.ps1 dot-source một lần, các lần sau dùng lại hàm đã nạp.
     [void]$s.Worker.AddScript({ param($path, $missingText, $readErrorText, $language)
         try {
             if (-not (Test-Path -LiteralPath $path)) { throw $missingText }
-            . $path
+            if ($AgentViewQuotaLoaded -ne $path -or -not (Get-Command Get-AgentQuotas -ErrorAction SilentlyContinue)) {
+                $AgentViewQuotaLoaded = $null
+                . $path
+                $AgentViewQuotaLoaded = $path
+            }
             Set-AgentViewLanguage $language
             Get-AgentQuotas
         } catch {
@@ -375,8 +428,23 @@ function Start-AgentViewRefresh($Tray) {
                 $providerName = 'Claude Code'; if ($provider -eq 'codex') { $providerName = 'Codex' }
                 [pscustomobject]@{Provider=$provider;Name=$providerName;Ok=$false;Error=$errorText;FiveHourUsed=$null;WeekUsed=$null;FiveHourResetsAt=$null;WeekResetsAt=$null;FetchedAt=Get-Date} }
         }
-    }).AddArgument((Join-Path $PSScriptRoot 'Quota.ps1')).AddArgument((T 'tray.missing_quota_ps1')).AddArgument((T 'tray.cannot_read_quota')).AddArgument((Get-AgentViewLanguage))
+    }).AddArgument($quotaPath).AddArgument((T 'tray.missing_quota_ps1')).AddArgument((T 'tray.cannot_read_quota')).AddArgument((Get-AgentViewLanguage))
     $s.Pending = $s.Worker.BeginInvoke(); $s.Last = Get-Date
+}
+# Worker xong ⇒ lấy rows rồi giải phóng PowerShell (giữ runspace). Lần gọi lỗi/runspace hỏng ⇒ bỏ runspace, lần sau tạo lại.
+# EndInvoke ném ⇒ vẫn ném như trước (sau khi dọn). Chưa xong ⇒ $null. Phát từng row; caller bọc @().
+function Receive-AgentViewRefresh($Tray) {
+    $s = $Tray.State
+    if (-not $s.Worker -or -not $s.Pending -or -not $s.Pending.IsCompleted) { return $null }
+    $rows = @(); $healthy = $false
+    try {
+        $rows = @(ConvertTo-QuotaRows ($s.Worker.EndInvoke($s.Pending)))
+        $healthy = ($s.Worker.InvocationStateInfo.State -ne [Management.Automation.PSInvocationState]::Failed)
+    } finally {
+        if ($s.Runspace -and (-not $healthy -or $s.Runspace.RunspaceStateInfo.State -ne [Management.Automation.Runspaces.RunspaceState]::Opened)) { Reset-AgentViewRefreshRunspace $s }
+        $s.Worker.Dispose(); $s.Worker = $null; $s.Pending = $null
+    }
+    return $rows
 }
 # Trên thread UI, sau ConvertTo-QuotaRows: history + thông báo, rồi lọc provider ẩn và cập nhật icon/tooltip/popup/widget.
 function Complete-AgentViewRefresh($Tray, $Rows, [datetime]$Now = (Get-Date)) {
@@ -393,6 +461,7 @@ function Complete-AgentViewRefresh($Tray, $Rows, [datetime]$Now = (Get-Date)) {
     Update-AgentViewPopup -Rows $s.View
     Update-AgentViewWidget -Rows $s.View
     if ($Tray.Notify) { Update-AgentViewTrayIcon $Tray; $Tray.Notify.Text = Format-QuotaTooltip $s.View }
+    Request-AgentViewMemoryTrim
 }
 # Áp settings vừa lưu từ cửa sổ cài đặt: ngôn ngữ (menu/tooltip/popup), chu kỳ refresh, provider ẩn, widget; rồi refresh ngay.
 function Invoke-AgentViewSettingsApply($Settings, $Tray) {
@@ -438,7 +507,7 @@ function Start-AgentView {
     Initialize-AgentViewTrayNative
     $settings = (Get-AgentViewWidgetState).Settings
     $tray = @{
-        State = @{ Rows=@(); View=@(); Worker=$null; Pending=$null; Last=[datetime]::MinValue; Frame=0; Loading=$false; RefreshSeconds=(Get-AgentViewRefreshSeconds $settings) }
+        State = @{ Rows=@(); View=@(); Worker=$null; Pending=$null; Runspace=$null; QuotaPath=$null; Last=[datetime]::MinValue; Frame=0; Loading=$false; RefreshSeconds=(Get-AgentViewRefreshSeconds $settings) }
         Context = (New-Object Windows.Forms.ApplicationContext); Notify = (New-Object Windows.Forms.NotifyIcon); Menu = (New-AgentViewTrayMenu)
         Animation = (New-Object Windows.Forms.Timer); Begin = $null; OpenPopup = $null; OpenToastPopup = $null; OpenSettings = $null; Apply = $null
         Update = (New-AgentViewUpdateTrayState); UpdateTimer = $null; InstallUpdate = { try { Start-AgentViewUpdate } catch { } }
@@ -475,8 +544,7 @@ function Start-AgentView {
     $timer.Add_Tick({
         $s = $tray.State
         if ($s.Worker -and $s.Pending.IsCompleted) {
-            $rows = @()
-            try { $rows = @(ConvertTo-QuotaRows ($s.Worker.EndInvoke($s.Pending))) } finally { $s.Worker.Dispose(); $s.Worker=$null }
+            $rows = @(Receive-AgentViewRefresh $tray)
             Complete-AgentViewRefresh $tray $rows
         }
         if (-not $s.Worker -and (Test-AgentViewRefreshDue $s)) { & $tray.Begin }
@@ -497,6 +565,9 @@ function Start-AgentView {
         Close-AgentViewSettingsWindow -Force
         Hide-AgentViewWidget
         if ($tray.State.Worker) { $tray.State.Worker.Stop(); $tray.State.Worker.Dispose() }
+        Reset-AgentViewRefreshRunspace $tray.State
+        Stop-AgentViewMemoryTrim
+        try { [void](Save-AgentViewHistory) } catch { }   # ghi phần history chưa lưu (ghi đĩa bị giãn 5 phút)
         $notify.Visible=$false; $notify.Icon.Dispose(); $notify.Dispose(); $menu.Strip.Dispose(); $tray.Context.Dispose()
     }
 }

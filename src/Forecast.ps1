@@ -26,11 +26,25 @@ function Get-AgentViewForecast($Samples, $Used, $ResetsAt, [ValidateSet('5h','we
     $lookback = if ($Window -eq '5h') { $nowUtc.AddMinutes(-60) } else { $nowUtc.AddHours(-24) }
     $xs = New-Object System.Collections.Generic.List[double]
     $ys = New-Object System.Collections.Generic.List[double]
+    # Chuỗi chuẩn yyyy-MM-ddTHH:mm:ssZ (History.ps1): so chuỗi để bỏ nhanh mẫu ngoài khung, ParseExact thay Parse; resets_at lặp lại ⇒ nhớ.
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $fmt = 'yyyy-MM-ddTHH:mm:ssZ'
+    $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+    $fromText = $lookback.ToString($fmt, $inv); $toText = $nowUtc.AddSeconds(1).ToString($fmt, $inv)
+    $d = [datetime]::MinValue
+    $rCache = @{}
     foreach ($s in @($Samples)) {
         if ($null -eq $s -or $null -eq $s.u) { continue }
-        $t = ConvertTo-AgentViewForecastUtc $s.t
+        $tv = $s.t
+        if ($tv -is [string] -and $tv.Length -eq 20 -and $tv[10] -eq 'T' -and $tv[19] -eq 'Z' -and $tv[4] -eq '-') {
+            if ([string]::CompareOrdinal($tv, $fromText) -lt 0 -or [string]::CompareOrdinal($tv, $toText) -gt 0) { continue }
+            if ([datetime]::TryParseExact($tv, $fmt, $inv, $styles, [ref]$d)) { $t = $d } else { $t = ConvertTo-AgentViewForecastUtc $tv }
+        } else { $t = ConvertTo-AgentViewForecastUtc $tv }
         if ($null -eq $t -or $t -lt $lookback -or $t -gt $nowUtc) { continue }
-        $r = ConvertTo-AgentViewForecastUtc $s.r
+        $rv = $s.r
+        if ($rv -is [string]) {
+            if ($rCache.ContainsKey($rv)) { $r = $rCache[$rv] } else { $r = ConvertTo-AgentViewForecastUtc $rv; $rCache[$rv] = $r }
+        } else { $r = ConvertTo-AgentViewForecastUtc $rv }
         # Cùng chu kỳ: cùng resets_at (cho lệch ≤2 phút vì provider có thể làm tròn khác nhau giữa các lần đọc), hoặc cùng null.
         if ($null -eq $resetUtc) { if ($null -ne $r) { continue } }
         elseif ($null -eq $r -or [math]::Abs(($r - $resetUtc).TotalMinutes) -gt 2) { continue }

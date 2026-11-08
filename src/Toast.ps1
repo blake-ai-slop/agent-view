@@ -396,7 +396,7 @@ function Hide-AgentViewToast {
     $fade = New-AgentViewToastAnimation 1 0 $m.OutMs 'EaseIn'
     $fade.Add_Completed({
         $s = Get-AgentViewToastState
-        if ($s.Closing -and $s.Window) { $s.Window.Hide(); $s.Closing = $false }
+        if ($s.Closing -and $s.Window) { $s.Window.Hide(); $s.Closing = $false; if (Get-Command Request-AgentViewMemoryTrim -ErrorAction SilentlyContinue) { Request-AgentViewMemoryTrim } }
     })
     $st.Ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewToastAnimation 0 $m.OutShift $m.OutMs 'EaseIn'))
     $st.Ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)

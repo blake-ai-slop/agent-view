@@ -1,5 +1,16 @@
 ﻿# Changelog
 
+## v0.2.2
+
+### Fixed
+
+- Animation stutter after each refresh as quota history grew: the tray icon, popup and widget no longer freeze while the usage history is saved, even with a full 8 days of history.
+
+### Changed
+
+- Lower memory and CPU use per refresh: the usage history stays in memory and is written to disk at most every 5 minutes (and when the app exits), the background quota reader is reused between refreshes, and memory is released after a refresh or when the popup or a notification closes.
+- History is stored more compactly: one sample per minute for the last 2 hours and one per 10 minutes before that (still 8 days). Existing history files are read and converted automatically.
+
 ## v0.2.1
 
 ### Added

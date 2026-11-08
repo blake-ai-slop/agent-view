@@ -119,3 +119,32 @@ Describe 'Format-AgentViewForecast' {
         } finally { $ps.Dispose() }
     }
 }
+
+Describe 'Forecast on thinned history (v0.2.2)' {
+    It 'gives the same 5h forecast and the same week verdict as on the dense samples' {
+        $now = (& $utc '2026-11-07T10:00:30').ToLocalTime()
+        $path = Join-Path $TestDrive 'thin-forecast.json'
+        $five = $now.AddMinutes(170); $week = $now.AddDays(2)
+        $dense5 = New-Object System.Collections.Generic.List[object]; $denseW = New-Object System.Collections.Generic.List[object]
+        for ($m = 2 * 24 * 60; $m -ge 0; $m -= 2) {
+            $t = $now.AddMinutes(-$m)
+            $u5 = [math]::Round(30 + 18 * (2880 - $m) / 2880.0 + ($m % 7) / 10.0, 2); $uw = [math]::Round(20 + 15 * (2880 - $m) / 2880.0, 2)
+            $row = [pscustomobject]@{ Provider = 'claude'; Ok = $true; FiveHourUsed = $u5; WeekUsed = $uw; FiveHourResetsAt = $five; WeekResetsAt = $week }
+            Add-AgentViewHistory -Rows @($row) -Now $t -Path $path
+            $ts = $t.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $dense5.Add([pscustomobject]@{ p = 'claude'; w = '5h'; u = $u5; t = $ts; r = $five.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') })
+            $denseW.Add([pscustomobject]@{ p = 'claude'; w = 'week'; u = $uw; t = $ts; r = $week.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') })
+        }
+        $idx = Get-AgentViewHistoryIndex -Path $path
+        $idx['claude|week'].Count | Should BeLessThan ($denseW.Count / 3)
+        $a = Get-AgentViewForecast -Samples $dense5.ToArray() -Used 48 -ResetsAt $five -Window '5h' -Now $now
+        $b = Get-AgentViewForecast -Samples $idx['claude|5h'] -Used 48 -ResetsAt $five -Window '5h' -Now $now
+        $b.Kind | Should Be $a.Kind
+        $b.RatePerHour | Should Be $a.RatePerHour
+        $b.At | Should Be $a.At
+        $c = Get-AgentViewForecast -Samples $denseW.ToArray() -Used 35 -ResetsAt $week -Window 'week' -Now $now
+        $d = Get-AgentViewForecast -Samples $idx['claude|week'] -Used 35 -ResetsAt $week -Window 'week' -Now $now
+        $d.Kind | Should Be $c.Kind
+        [math]::Abs($d.RatePerHour - $c.RatePerHour) -lt 0.02 | Should Be $true
+    }
+}
