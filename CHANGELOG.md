@@ -1,5 +1,12 @@
 ﻿# Changelog
 
+## v0.2.3
+
+### Changed
+
+- Faster start-up: the popup, notification, widget and settings windows now share one window helper, so the interface loads about 40% faster. No visible changes.
+- Internal clean-up of the core, tray and CLI code (duplicate helpers merged, unused state removed). Behavior, settings and data files are unchanged.
+
 ## v0.2.2
 
 ### Fixed

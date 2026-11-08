@@ -1,4 +1,4 @@
-﻿. (Join-Path $PSScriptRoot 'I18n.ps1')
+﻿if (-not (Test-Path function:Register-AgentViewStrings)) { . (Join-Path $PSScriptRoot 'I18n.ps1') }
 Register-AgentViewStrings -Module 'toast' -Strings @{
     en = @{ 'more' = '+{0} more'; 'close' = 'Close'; 'now' = '· just now' }
     vi = @{ 'more' = '+{0} thông báo khác'; 'close' = 'Đóng'; 'now' = '· vừa xong' }
@@ -7,7 +7,7 @@ Register-AgentViewStrings -Module 'toast' -Strings @{
 # Dot-source chỉ định nghĩa hàm (và đăng ký chuỗi). Một toast mỗi tiến trình, sống trên thread STA của tray.
 # Hợp đồng: Show-AgentViewToast -Items @(@{Provider;Window;Kind(low|reset|update);Remaining;Title;Text}) [-Warning] [-OnClick {}],
 #           Hide-AgentViewToast, Close-AgentViewToast -Force, Test-AgentViewToastOpen, Test-AgentViewUserBusy.
-. (Join-Path $PSScriptRoot 'Ring.ps1')
+if (-not (Test-Path function:New-AgentRing)) { . (Join-Path $PSScriptRoot 'Ring.ps1') }
 
 function Get-AgentViewToastMetrics {
     @{
@@ -19,14 +19,8 @@ function Get-AgentViewToastMetrics {
 }
 
 # ---------------------------------------------------------------- hàm thuần
-# Vị trí cửa sổ (gồm lề bóng) để mép toast cách góc dưới phải WorkArea 12px.
 function Get-AgentViewToastPlacement($WorkArea, [double]$WindowHeight) {
-    $m = Get-AgentViewToastMetrics
-    [pscustomobject]@{
-        Left = $WorkArea.Right - $m.Gap - $m.Width - $m.ShadowLeft
-        Top = $WorkArea.Bottom - $m.Gap + $m.ShadowBottom - $WindowHeight
-        Width = $m.Width + $m.ShadowLeft + $m.ShadowRight
-    }
+    Get-AgentViewCornerPlacement $WorkArea $WindowHeight (Get-AgentViewToastMetrics)
 }
 
 # Hàng hiển thị: tối đa MaxRows, phần thừa ⇒ More = N. 'reset' ⇒ vòng đầy, ✓, màu ok.
@@ -60,25 +54,12 @@ function Get-AgentViewToastProviderColor([string]$Provider, $Theme) {
 }
 
 # ---------------------------------------------------------------- người dùng bận
-function Initialize-AgentViewToastNative {
-    if (-not ('AgentView.ToastNative' -as [type])) {
-        Add-Type -TypeDefinition @'
-namespace AgentView {
-  public static class ToastNative {
-    [System.Runtime.InteropServices.DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
-    [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern int GetWindowLong(System.IntPtr h, int i);
-    [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern int SetWindowLong(System.IntPtr h, int i, int v);
-  }
-}
-'@
-    }
-}
 # Bận = toàn màn hình/trình chiếu/quiet time/khóa máy (mọi trạng thái khác QUNS_ACCEPTS_NOTIFICATIONS=5). Lỗi ⇒ không bận.
 function Test-AgentViewUserBusy {
     try {
-        Initialize-AgentViewToastNative
+        Initialize-AgentViewNative
         $state = 0
-        $hr = [AgentView.ToastNative]::SHQueryUserNotificationState([ref]$state)
+        $hr = [AgentView.UiNative]::SHQueryUserNotificationState([ref]$state)
         if ($hr -ne 0) { return $false }
         return ($state -ne 5)
     } catch { return $false }
@@ -86,27 +67,15 @@ function Test-AgentViewUserBusy {
 
 # ---------------------------------------------------------------- trạng thái (một toast mỗi tiến trình)
 function Get-AgentViewToastState {
-    $st = [AppDomain]::CurrentDomain.GetData('agent-view.toast')
-    if ($null -eq $st) {
-        $st = @{ Window = $null; Ui = @{}; OnClick = $null; Closing = $false; Timer = $null; WorkArea = $null; Model = $null; Handlers = @{}
-                 LeftMs = 0; Clock = $null }
-        [AppDomain]::CurrentDomain.SetData('agent-view.toast', $st)
+    Get-AgentViewUiState 'agent-view.toast' {
+        @{ Window = $null; Ui = @{}; OnClick = $null; Closing = $false; Timer = $null; WorkArea = $null; Model = $null; Handlers = @(); LeftMs = 0; Clock = $null }
     }
-    $st
 }
 
 function Get-AgentViewToastXaml {
     $m = Get-AgentViewToastMetrics
     $w = $m.Width + $m.ShadowLeft + $m.ShadowRight
-    @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-  Title="agent-view" WindowStyle="None" AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False" Topmost="True"
-  ShowActivated="False" Focusable="False" ResizeMode="NoResize" SizeToContent="Height" Width="$w" UseLayoutRounding="True"
-  FontFamily="$($m.FontText)" FontSize="12" Foreground="@@av-text@@">
- <Border x:Name="Shell" Width="$($m.Width)" Margin="$($m.ShadowLeft),$($m.ShadowTop),$($m.ShadowRight),$($m.ShadowBottom)" CornerRadius="12" BorderThickness="1" BorderBrush="@@av-stroke@@" Padding="12,10,12,12" Cursor="Hand">
-  <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="0,1"><GradientStop Color="@@av-bg-top@@" Offset="0"/><GradientStop Color="@@av-bg@@" Offset="1"/></LinearGradientBrush></Border.Background>
-  <Border.Effect><DropShadowEffect BlurRadius="40" ShadowDepth="18" Direction="270" Opacity="0.55" Color="Black"/></Border.Effect>
-  <Border.RenderTransform><TranslateTransform x:Name="ShellShift"/></Border.RenderTransform>
+    $body = @"
   <StackPanel>
    <Grid Height="22">
     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -133,13 +102,12 @@ function Get-AgentViewToastXaml {
     </Border>
    </Border>
   </StackPanel>
- </Border>
-</Window>
 "@
-}
-
-function Expand-AgentViewToastXaml([string]$Xaml, $Theme) {
-    [regex]::Replace($Xaml, '@@([a-z0-9-]+)@@', { param($x) $Theme[$x.Groups[1].Value] })
+    Get-AgentViewShellXaml -Body $body `
+        -Window ('Title="agent-view" ShowInTaskbar="False" Topmost="True" ShowActivated="False" Focusable="False" SizeToContent="Height" Width="{0}" UseLayoutRounding="True" FontFamily="{1}" FontSize="12" Foreground="@@av-text@@"' -f $w, $m.FontText) `
+        -Shell ('Width="{0}" Margin="{1},{2},{3},{4}" CornerRadius="12" Padding="12,10,12,12" Cursor="Hand"' -f $m.Width, $m.ShadowLeft, $m.ShadowTop, $m.ShadowRight, $m.ShadowBottom) `
+        -Shadow 'BlurRadius="40" ShadowDepth="18" Direction="270" Opacity="0.55" Color="Black"' `
+        -Transform '<Border.RenderTransform><TranslateTransform x:Name="ShellShift"/></Border.RenderTransform>'
 }
 
 # Biểu tượng cập nhật 40px: vòng accent mờ + mũi tên lên accent (thay vòng %, cùng kích thước).
@@ -175,20 +143,8 @@ function New-AgentViewToastRing($Row, $Theme) {
     $track.Data = New-Object System.Windows.Media.EllipseGeometry ((New-Object System.Windows.Point $c, $c), $r, $r)
     $track.Stroke = ConvertTo-AgentViewBrush $Theme['av-track']; $track.StrokeThickness = $m.RingStroke
     [void]$canvas.Children.Add($track)
-    $plan = Get-AgentArcPlan $c $r $Row.Value
-    if ($plan.Visible) {
-        $fig = New-Object System.Windows.Media.PathFigure
-        $fig.IsClosed = $false; $fig.IsFilled = $false
-        $fig.StartPoint = New-Object System.Windows.Point $plan.Start.X, $plan.Start.Y
-        foreach ($s in $plan.Segments) {
-            $fig.Segments.Add((New-Object System.Windows.Media.ArcSegment ((New-Object System.Windows.Point $s.Point.X, $s.Point.Y), (New-Object System.Windows.Size $r, $r), 0, $s.IsLargeArc, ([System.Windows.Media.SweepDirection]::Clockwise), $true)))
-        }
-        $geo = New-Object System.Windows.Media.PathGeometry; $geo.Figures.Add($fig)
-        $arc = New-Object System.Windows.Shapes.Path
-        $arc.Data = $geo; $arc.Stroke = $color; $arc.StrokeThickness = $m.RingStroke
-        $arc.StrokeStartLineCap = 'Round'; $arc.StrokeEndLineCap = 'Round'
-        [void]$canvas.Children.Add($arc)
-    }
+    $arc = New-AgentArcPath $m.RingStroke
+    if (Set-AgentArcFigure $arc.Data.Figures[0] $c $r $Row.Value) { $arc.Stroke = $color; [void]$canvas.Children.Add($arc) }
     [void]$grid.Children.Add($canvas)
     $txt = New-Object System.Windows.Controls.TextBlock
     $txt.Text = $Row.Center; $txt.Foreground = $color; $txt.FontWeight = [System.Windows.FontWeights]::Bold
@@ -203,62 +159,49 @@ function New-AgentViewToastWindow {
     Initialize-AgentViewWpf
     $st = Get-AgentViewToastState
     $theme = Get-AgentViewTheme
-    $window = [System.Windows.Markup.XamlReader]::Parse((Expand-AgentViewToastXaml (Get-AgentViewToastXaml) $theme))
-    $ui = @{}
-    foreach ($n in 'Shell', 'ShellShift', 'Dot', 'DotHalo', 'NowText', 'CloseBtn', 'Rows', 'MoreText', 'Bar', 'BarScale') { $ui[$n] = $window.FindName($n) }
-    $st.Window = $window; $st.Ui = $ui; $st.Theme = $theme; $st.Handlers = @{}
+    $window, $ui = New-AgentViewXamlObject (Get-AgentViewToastXaml) $theme @('Shell', 'ShellShift', 'Dot', 'DotHalo', 'NowText', 'CloseBtn', 'Rows', 'MoreText', 'Bar', 'BarScale')
+    $st.Window = $window; $st.Ui = $ui; $st.Theme = $theme; $st.Handlers = @()
 
-    # Không nhận focus kể cả khi bấm (WS_EX_NOACTIVATE), không hiện trong Alt+Tab (WS_EX_TOOLWINDOW).
-    $st.Handlers.Source = [EventHandler]{
-        try {
-            Initialize-AgentViewToastNative
-            $h = (New-Object System.Windows.Interop.WindowInteropHelper ($this)).Handle
-            $ex = [AgentView.ToastNative]::GetWindowLong($h, -20)
-            [void][AgentView.ToastNative]::SetWindowLong($h, -20, ($ex -bor 0x08000000 -bor 0x80))
-        } catch { }
-    }
-    $window.Add_SourceInitialized($st.Handlers.Source)
-    $st.Handlers.Size = [System.Windows.SizeChangedEventHandler]{
+    # Không nhận focus kể cả khi bấm, không hiện trong Alt+Tab.
+    Add-AgentViewHandler $st $window 'SourceInitialized' { Set-AgentViewNoActivate $this }
+    Add-AgentViewHandler $st $window 'SizeChanged' {
         $s = Get-AgentViewToastState
         if ($s.WorkArea -and $s.Window) { $s.Window.Top = (Get-AgentViewToastPlacement $s.WorkArea $s.Window.ActualHeight).Top }
     }
-    $window.Add_SizeChanged($st.Handlers.Size)
-    $st.Handlers.Enter = [System.Windows.Input.MouseEventHandler]{
+    Add-AgentViewHandler $st $ui.Shell 'MouseEnter' {
         $s = Get-AgentViewToastState
         if ($s.Closing) {   # đang mờ đi ⇒ giữ lại
             $s.Closing = $false
             $s.Ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null); $s.Ui.Shell.Opacity = 1
             $s.Ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $null); $s.Ui.ShellShift.Y = 0
             $s.LeftMs = (Get-AgentViewToastMetrics).HideMs
-            $s.Ui.BarScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, $null); $s.Ui.BarScale.ScaleX = 1
+            Set-AgentViewToastBar $s 1
             $s.Timer.Stop(); $s.Clock = $null
         } else { Suspend-AgentViewToastCountdown }
         $s.Hover = $true
         if (-not $s.Model.Warning) { $s.Ui.Shell.BorderBrush = ConvertTo-AgentViewBrush '#3A4256' }   # cảnh báo giữ viền crit
     }
-    $ui.Shell.Add_MouseEnter($st.Handlers.Enter)
-    $st.Handlers.Leave = [System.Windows.Input.MouseEventHandler]{
+    Add-AgentViewHandler $st $ui.Shell 'MouseLeave' {
         $s = Get-AgentViewToastState
         $s.Hover = $false
         Set-AgentViewToastBorder
         if (Test-AgentViewToastOpen) { Start-AgentViewToastCountdown }
     }
-    $ui.Shell.Add_MouseLeave($st.Handlers.Leave)
-    $st.Handlers.Body = [System.Windows.Input.MouseButtonEventHandler]{
-        $s = Get-AgentViewToastState
-        $cb = $s.OnClick
+    Add-AgentViewHandler $st $ui.Shell 'MouseLeftButtonUp' {
+        $cb = (Get-AgentViewToastState).OnClick
         if ($cb) { try { & $cb } catch { } }
         Hide-AgentViewToast
     }
-    $ui.Shell.Add_MouseLeftButtonUp($st.Handlers.Body)
-    $st.Handlers.Close = [System.Windows.RoutedEventHandler]{ $_.Handled = $true; Hide-AgentViewToast }
-    $ui.CloseBtn.Add_Click($st.Handlers.Close)
-
-    $timer = New-Object System.Windows.Threading.DispatcherTimer
-    $st.Handlers.Tick = [EventHandler]{ $this.Stop(); Hide-AgentViewToast }
-    $timer.Add_Tick($st.Handlers.Tick)
-    $st.Timer = $timer
+    Add-AgentViewHandler $st $ui.CloseBtn 'Click' { $_.Handled = $true; Hide-AgentViewToast }
+    $st.Timer = New-Object System.Windows.Threading.DispatcherTimer
+    Add-AgentViewHandler $st $st.Timer 'Tick' { $this.Stop(); Hide-AgentViewToast }
     $window
+}
+
+# Thanh đếm ngược đứng yên ở tỉ lệ Scale (gỡ hoạt ảnh đang chạy).
+function Set-AgentViewToastBar($State, [double]$Scale) {
+    $State.Ui.BarScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, $null)
+    $State.Ui.BarScale.ScaleX = $Scale
 }
 
 # Viền theo trạng thái: cảnh báo ⇒ crit 55%; thường ⇒ av-stroke.
@@ -279,7 +222,7 @@ function Start-AgentViewToastCountdown {
     $st.Timer.Interval = [TimeSpan]::FromMilliseconds($left)
     $st.LeftMs = $left
     $st.Clock = [Diagnostics.Stopwatch]::StartNew()
-    $bar = New-Object System.Windows.Media.Animation.DoubleAnimation $from, 0, (New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($left)))
+    $bar = New-AgentViewDoubleAnimation $from 0 $left ''
     $st.Ui.BarScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, $bar)
     $st.Timer.Start()
 }
@@ -288,8 +231,7 @@ function Suspend-AgentViewToastCountdown {
     $m = Get-AgentViewToastMetrics
     $st.Timer.Stop()
     if ($st.Clock) { $st.LeftMs = [math]::Max(0, $st.LeftMs - $st.Clock.Elapsed.TotalMilliseconds); $st.Clock = $null }
-    $st.Ui.BarScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, $null)
-    $st.Ui.BarScale.ScaleX = [math]::Min(1.0, $st.LeftMs / $m.HideMs)
+    Set-AgentViewToastBar $st ([math]::Min(1.0, $st.LeftMs / $m.HideMs))
 }
 
 function Set-AgentViewToastContent($Model) {
@@ -299,7 +241,7 @@ function Set-AgentViewToastContent($Model) {
     $ui.NowText.Text = (T 'toast.now')
     $ui.Rows.Children.Clear()
     $ui.Dot.Fill = ConvertTo-AgentViewBrush $(if ($Model.Warning) { $theme['crit'] } else { $theme['accent'] })
-    $ui.DotHalo.Visibility = $(if ($Model.Warning) { 'Visible' } else { 'Collapsed' })
+    $ui.DotHalo.Visibility = Get-AgentViewVisibility $Model.Warning
     $ui.Bar.Background = $(if ($Model.Warning) { ConvertTo-AgentViewBrush $theme['crit'] 0.7 } else { ConvertTo-AgentViewBrush $theme['av-text-3'] })
     Set-AgentViewToastBorder
     $i = 0
@@ -338,14 +280,7 @@ function Set-AgentViewToastContent($Model) {
         $i++
     }
     $ui.MoreText.Text = [string]$Model.MoreText
-    $ui.MoreText.Visibility = $(if ($Model.More) { 'Visible' } else { 'Collapsed' })
-}
-
-function New-AgentViewToastAnimation([double]$From, [double]$To, [double]$Ms, [string]$Mode) {
-    $a = New-Object System.Windows.Media.Animation.DoubleAnimation $From, $To, (New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms)))
-    $e = New-Object System.Windows.Media.Animation.CubicEase; $e.EasingMode = $Mode
-    $a.EasingFunction = $e
-    $a
+    $ui.MoreText.Visibility = Get-AgentViewVisibility $Model.More
 }
 
 # ---------------------------------------------------------------- API công khai
@@ -379,11 +314,11 @@ function Show-AgentViewToast {
         $ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $null)
         $ui.Shell.Opacity = $from
         if (-not $wasVisible) { $w.Show() }
-        $ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-AgentViewToastAnimation $from 1 $m.InMs 'EaseOut'))
-        $ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewToastAnimation $m.InShift 0 $m.InMs 'EaseOut'))
+        $ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-AgentViewDoubleAnimation $from 1 $m.InMs))
+        $ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewDoubleAnimation $m.InShift 0 $m.InMs))
     }
     $st.LeftMs = $m.HideMs; $st.Clock = $null
-    if ($ui.Shell.IsMouseOver) { $st.Timer.Stop(); $ui.BarScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, $null); $ui.BarScale.ScaleX = 1 }
+    if ($ui.Shell.IsMouseOver) { $st.Timer.Stop(); Set-AgentViewToastBar $st 1 }
     else { Start-AgentViewToastCountdown }
 }
 
@@ -393,12 +328,12 @@ function Hide-AgentViewToast {
     $m = Get-AgentViewToastMetrics
     $st.Closing = $true
     $st.Timer.Stop(); $st.Clock = $null
-    $fade = New-AgentViewToastAnimation 1 0 $m.OutMs 'EaseIn'
+    $fade = New-AgentViewDoubleAnimation 1 0 $m.OutMs 'CubicIn'
     $fade.Add_Completed({
         $s = Get-AgentViewToastState
-        if ($s.Closing -and $s.Window) { $s.Window.Hide(); $s.Closing = $false; if (Get-Command Request-AgentViewMemoryTrim -ErrorAction SilentlyContinue) { Request-AgentViewMemoryTrim } }
+        if ($s.Closing -and $s.Window) { $s.Window.Hide(); $s.Closing = $false; Request-AgentViewUiTrim }
     })
-    $st.Ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewToastAnimation 0 $m.OutShift $m.OutMs 'EaseIn'))
+    $st.Ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewDoubleAnimation 0 $m.OutShift $m.OutMs 'CubicIn'))
     $st.Ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)
 }
 
@@ -408,20 +343,14 @@ function Close-AgentViewToast {
     if (-not $Force) { Hide-AgentViewToast; return }
     $st = Get-AgentViewToastState
     if (-not $st.Window) { return }
-    $w = $st.Window; $ui = $st.Ui; $h = $st.Handlers
+    $ui = $st.Ui
     $st.Closing = $true
-    if ($st.Timer) { $st.Timer.Stop(); if ($h.Tick) { $st.Timer.Remove_Tick($h.Tick) } }
-    if ($h.Source) { $w.Remove_SourceInitialized($h.Source) }
-    if ($h.Size) { $w.Remove_SizeChanged($h.Size) }
-    if ($h.Enter) { $ui.Shell.Remove_MouseEnter($h.Enter) }
-    if ($h.Leave) { $ui.Shell.Remove_MouseLeave($h.Leave) }
-    if ($h.Body) { $ui.Shell.Remove_MouseLeftButtonUp($h.Body) }
-    if ($h.Close) { $ui.CloseBtn.Remove_Click($h.Close) }
+    if ($st.Timer) { $st.Timer.Stop() }
+    Remove-AgentViewHandlers $st
     $ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null)
     $ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $null)
     $ui.BarScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, $null)
-    $w.Close()
-    $w.Dispatcher.Invoke([System.Windows.Threading.DispatcherPriority]::ContextIdle, [Action]{})
-    $st.Window = $null; $st.Ui = @{}; $st.Timer = $null; $st.Handlers = @{}; $st.OnClick = $null; $st.Model = $null
+    Close-AgentViewWindowNow $st.Window
+    $st.Window = $null; $st.Ui = @{}; $st.Timer = $null; $st.OnClick = $null; $st.Model = $null
     $st.Closing = $false; $st.Clock = $null; $st.Hover = $false
 }

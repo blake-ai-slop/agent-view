@@ -1,7 +1,7 @@
-﻿# Modeless WPF preferences; loading defines functions/strings only.
-. (Join-Path $PSScriptRoot 'I18n.ps1')
-. (Join-Path $PSScriptRoot 'Theme.ps1')
-. (Join-Path $PSScriptRoot 'Cli.ps1')
+﻿# Cửa sổ cài đặt WPF không modal; dot-source chỉ định nghĩa hàm/chuỗi.
+if (-not (Test-Path function:Register-AgentViewStrings)) { . (Join-Path $PSScriptRoot 'I18n.ps1') }
+if (-not (Test-Path function:Initialize-AgentViewWpf)) { . (Join-Path $PSScriptRoot 'Ui.ps1') }
+if (-not (Test-Path function:Get-AgentViewPaths)) { . (Join-Path $PSScriptRoot 'Cli.ps1') }
 Register-AgentViewStrings -Module 'settings' -Strings @{
     en=@{
         title='Settings'; language='Language'; auto='Automatic'; english='English'; vietnamese=([Globalization.CultureInfo]::GetCultureInfo('vi').NativeName)
@@ -23,19 +23,10 @@ Register-AgentViewStrings -Module 'settings' -Strings @{
     }
 }
 function Get-AgentViewSettingsWindowState {
-    $s=[AppDomain]::CurrentDomain.GetData('agent-view.settings-window')
-    if (-not $s) {
-        $s=@{Window=$null;Ui=@{};OnSaved=$null}
-        [AppDomain]::CurrentDomain.SetData('agent-view.settings-window',$s)
-    }
-    return $s
+    Get-AgentViewUiState 'agent-view.settings-window' { @{ Window = $null; Ui = @{}; OnSaved = $null; Handlers = @() } }
 }
 function Get-AgentViewSettingsWindowXaml {
-    $x=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
- Title="@title@" Width="512" SizeToContent="Height" WindowStartupLocation="CenterScreen"
- WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
- FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13" Foreground="@@av-text@@">
+    $resources=@'
  <Window.Resources>
   <Style TargetType="TextBlock"><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style TargetType="CheckBox">
@@ -67,9 +58,8 @@ function Get-AgentViewSettingsWindowXaml {
    <Setter Property="Foreground" Value="@@av-text-2@@"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Margin" Value="0,16,0,5"/>
   </Style>
  </Window.Resources>
- <Border x:Name="Shell" Margin="28,16,28,44" CornerRadius="8" BorderThickness="1" BorderBrush="@@av-stroke@@">
-  <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="0,1"><GradientStop Color="@@av-bg-top@@" Offset="0"/><GradientStop Color="@@av-bg@@" Offset="1"/></LinearGradientBrush></Border.Background>
-  <Border.Effect><DropShadowEffect BlurRadius="32" ShadowDepth="12" Direction="270" Opacity="0.55" Color="Black"/></Border.Effect>
+'@
+    $body=@'
   <StackPanel Margin="24,20,24,22">
    <TextBlock x:Name="TitleBar" Text="@title@" FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="22" FontWeight="SemiBold"/>
    <TextBlock Text="@language@" Style="{StaticResource Heading}"/>
@@ -107,11 +97,10 @@ function Get-AgentViewSettingsWindowXaml {
     <Button x:Name="Save" Content="@save@" Background="@@accent@@" Foreground="@@av-bg@@" IsDefault="True"/>
    </StackPanel>
   </StackPanel>
- </Border>
-</Window>
-"@
-    $theme=Get-AgentViewTheme
-    $x=[regex]::Replace($x,'@@([a-z0-9-]+)@@',{param($m) $theme[$m.Groups[1].Value]})
+'@
+    $x=Get-AgentViewShellXaml -Resources $resources -Body $body -Shell 'Margin="28,16,28,44" CornerRadius="8"' `
+        -Window 'Title="@title@" Width="512" SizeToContent="Height" WindowStartupLocation="CenterScreen" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13" Foreground="@@av-text@@"'
+    $x=Expand-AgentViewXaml $x
     [regex]::Replace($x,'@([a-z0-9_]+)@',{param($m) [Security.SecurityElement]::Escape((Get-AgentViewText ('settings.'+$m.Groups[1].Value)))})
 }
 function Save-AgentViewSettingsWindow {
@@ -145,11 +134,10 @@ function Show-AgentViewSettingsWindow {
         [void]$st.Window.Activate()
         return
     }
-    Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase,WindowsFormsIntegration
-    $w=[Windows.Markup.XamlReader]::Parse((Get-AgentViewSettingsWindowXaml))
-    $st.Window=$w; $st.OnSaved=$OnSaved
-    foreach ($name in @('Shell','TitleBar','LangAuto','LangEn','LangVi','Refresh60','Refresh120','Refresh300','NotifyEnabled','Threshold1','Threshold2','NotifyReset','UpdateCheck','WidgetEnabled','Autostart','Claude','Codex','Error','Cancel','Save')) { $st.Ui[$name]=$w.FindName($name) }
-    $s=Get-AgentViewSettings; $ui=$st.Ui
+    Initialize-AgentViewWpf
+    $w,$ui=New-AgentViewXamlObject (Get-AgentViewSettingsWindowXaml) $null @('Shell','TitleBar','LangAuto','LangEn','LangVi','Refresh60','Refresh120','Refresh300','NotifyEnabled','Threshold1','Threshold2','NotifyReset','UpdateCheck','WidgetEnabled','Autostart','Claude','Codex','Error','Cancel','Save')
+    $st.Window=$w; $st.Ui=$ui; $st.OnSaved=$OnSaved; $st.Handlers=@()
+    $s=Get-AgentViewSettings
     $ui.LangAuto.IsChecked=($s.Language -eq 'auto'); $ui.LangEn.IsChecked=($s.Language -eq 'en'); $ui.LangVi.IsChecked=($s.Language -eq 'vi')
     $ui['Refresh'+$s.RefreshSeconds].IsChecked=$true
     $ui.UpdateCheck.IsChecked=$s.UpdateCheck
@@ -157,14 +145,11 @@ function Show-AgentViewSettingsWindow {
     $ui.Threshold1.Text=[string]$s.NotifyThresholds[0]; $ui.Threshold2.Text=[string]$s.NotifyThresholds[1]
     $ui.WidgetEnabled.IsChecked=$s.WidgetEnabled; $ui.Autostart.IsChecked=Test-AgentViewAutostart (Get-AgentViewPaths)
     $ui.Claude.IsChecked=('claude' -notin $s.HiddenProviders); $ui.Codex.IsChecked=('codex' -notin $s.HiddenProviders)
-    $st.SaveHandler=[Windows.RoutedEventHandler]{ [void](Save-AgentViewSettingsWindow) }
-    $st.CancelHandler=[Windows.RoutedEventHandler]{ Close-AgentViewSettingsWindow -Force }
-    $st.KeyHandler=[Windows.Input.KeyEventHandler]{param($sender,$e) if ($e.Key -eq 'Escape') { $e.Handled=$true; Close-AgentViewSettingsWindow -Force }}
-    $st.DragHandler=[Windows.Input.MouseButtonEventHandler]{param($sender,$e) if ($e.ChangedButton -eq 'Left') { (Get-AgentViewSettingsWindowState).Window.DragMove() }}
-    $st.ClosedHandler=[EventHandler]{ [AppDomain]::CurrentDomain.SetData('agent-view.settings-window',$null) }
-    $ui.Save.Add_Click($st.SaveHandler); $ui.Cancel.Add_Click($st.CancelHandler)
-    $ui.TitleBar.Add_MouseLeftButtonDown($st.DragHandler)
-    $w.Add_PreviewKeyDown($st.KeyHandler); $w.Add_Closed($st.ClosedHandler)
+    Add-AgentViewHandler $st $ui.Save 'Click' { [void](Save-AgentViewSettingsWindow) }
+    Add-AgentViewHandler $st $ui.Cancel 'Click' { Close-AgentViewSettingsWindow -Force }
+    Add-AgentViewHandler $st $ui.TitleBar 'MouseLeftButtonDown' { if ($_.ChangedButton -eq 'Left') { (Get-AgentViewSettingsWindowState).Window.DragMove() } }
+    Add-AgentViewHandler $st $w 'PreviewKeyDown' { if ($_.Key -eq 'Escape') { $_.Handled=$true; Close-AgentViewSettingsWindow -Force } }
+    Add-AgentViewHandler $st $w 'Closed' { [AppDomain]::CurrentDomain.SetData('agent-view.settings-window',$null) }
     [Windows.Forms.Integration.ElementHost]::EnableModelessKeyboardInterop($w)
     $w.Show()
     [void]$w.Activate()
@@ -173,11 +158,7 @@ function Close-AgentViewSettingsWindow {
     param([switch]$Force)
     $st=Get-AgentViewSettingsWindowState
     if (-not $st.Window) { return }
-    $w=$st.Window
-    $st.Ui.Save.Remove_Click($st.SaveHandler); $st.Ui.Cancel.Remove_Click($st.CancelHandler)
-    $st.Ui.TitleBar.Remove_MouseLeftButtonDown($st.DragHandler)
-    $w.Remove_PreviewKeyDown($st.KeyHandler); $w.Remove_Closed($st.ClosedHandler)
-    $w.Close()
-    [void]$w.Dispatcher.Invoke([Windows.Threading.DispatcherPriority]::ContextIdle,[Action]{})
+    Remove-AgentViewHandlers $st
+    Close-AgentViewWindowNow $st.Window
     [AppDomain]::CurrentDomain.SetData('agent-view.settings-window',$null)
 }

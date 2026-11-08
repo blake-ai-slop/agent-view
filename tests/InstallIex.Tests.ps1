@@ -53,9 +53,10 @@ function New-IexTestRunner([string]$Mode) {
 function Assert-IexTestInstalled($Box, $Result) {
     $Result.Code | Should Be 0
     $root = Join-Path $Box.Local 'agent-view'
-    foreach ($name in @('I18n.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Process.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','Version.ps1','Cli.ps1','uninstall.ps1','launch.vbs','bin\agentview.cmd')) {
+    foreach ($name in @('I18n.ps1','Ui.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Process.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','Version.ps1','Cli.ps1','uninstall.ps1','launch.vbs','bin\agentview.cmd')) {
         Test-Path -LiteralPath (Join-Path $root $name) | Should Be $true
     }
+    @(Get-ChildItem -LiteralPath $root -Filter '*.ps1').Count | Should Be 21
     Test-Path -LiteralPath (Join-Path $Box.Startup 'agent-view.lnk') | Should Be $true
     [IO.File]::ReadAllText($Box.UserPath) | Should Be ('C:\keep;' + (Join-Path $root 'bin'))
     @(Get-ChildItem -LiteralPath $Box.Temp -Filter 'agent-view-*' -Force).Count | Should Be 0

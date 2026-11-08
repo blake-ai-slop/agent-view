@@ -127,7 +127,6 @@ Register-AgentViewStrings -Module 'cli' -Strings @{
 # Dot-source không side effect. Chạy được trên Windows PowerShell 5.1 và pwsh 7; app luôn chạy bằng powershell.exe.
 # Biến môi trường ẩn cho thử nghiệm: AGENT_VIEW_STARTUP_DIR (thư mục Startup), AGENT_VIEW_USER_PATH_FILE (PATH người dùng giả).
 $script:AgentViewVersion = '0.0.0'  # dự phòng khi thiếu Version.ps1 (vd. bản sao tạm lúc gỡ); nguồn thật: src/Version.ps1
-$script:AgentViewDefaultSource = 'https://raw.githubusercontent.com/blake-ai-slop/agent-view/main'
 $script:AgentViewCommands = @('up','start','down','stop','restart','status','lang','widget','autostart','update','uninstall','version','help')
 foreach ($__dep in @('Version.ps1','Settings.ps1','Format.ps1','Update.ps1')) { $__p = Join-Path $PSScriptRoot $__dep; if (Test-Path -LiteralPath $__p) { . $__p } }
 Remove-Variable __dep,__p -ErrorAction SilentlyContinue
@@ -167,13 +166,16 @@ function Test-AgentViewPathSegment([string]$Segment, [string]$Dir) {
     $b = $Dir.Trim().TrimEnd('\','/')
     return $a -ieq $b
 }
+function Get-AgentViewPathSegments([string]$PathValue) {
+    ([string]$PathValue).Split(';') | Where-Object { $_.Trim() -ne '' }
+}
 function Add-AgentViewPathEntry([string]$PathValue, [string]$Dir) {
-    $parts = @(([string]$PathValue).Split(';') | Where-Object { $_.Trim() -ne '' })
+    $parts = @(Get-AgentViewPathSegments $PathValue)
     if (@($parts | Where-Object { Test-AgentViewPathSegment $_ $Dir }).Count -gt 0) { return ($parts -join ';') }
     return ((@($parts) + $Dir) -join ';')
 }
 function Remove-AgentViewPathEntry([string]$PathValue, [string]$Dir) {
-    $parts = @(([string]$PathValue).Split(';') | Where-Object { $_.Trim() -ne '' -and -not (Test-AgentViewPathSegment $_ $Dir) })
+    $parts = @(Get-AgentViewPathSegments $PathValue | Where-Object { -not (Test-AgentViewPathSegment $_ $Dir) })
     return ($parts -join ';')
 }
 function Get-AgentViewUserPath {
@@ -201,7 +203,7 @@ function Set-AgentViewUserPathEntry([string]$Dir, [bool]$Present) {
     $old = Get-AgentViewUserPath
     if ($Present) { $new = Add-AgentViewPathEntry $old $Dir; $env:Path = Add-AgentViewPathEntry $env:Path $Dir }
     else { $new = Remove-AgentViewPathEntry $old $Dir; $env:Path = Remove-AgentViewPathEntry $env:Path $Dir }
-    if ($new -eq (@(([string]$old).Split(';') | Where-Object { $_.Trim() -ne '' }) -join ';')) { return $false }
+    if ($new -eq (@(Get-AgentViewPathSegments $old) -join ';')) { return $false }
     Set-AgentViewUserPath $new
     return $true
 }
@@ -263,11 +265,7 @@ function Set-AgentViewAutostart($Paths, [bool]$Enabled) {
 
 # ---------- in ----------
 function Write-AgentViewStep([string]$Kind, [string]$Text, [string]$Detail) {
-    $mark = @{ ok='✓'; fail='✗'; skip='–'; info='·' }[$Kind]
-    $color = @{ ok='Green'; fail='Red'; skip='DarkGray'; info='Gray' }[$Kind]
-    Write-Host ('  ' + $mark + ' ') -ForegroundColor $color -NoNewline
-    Write-Host $Text -NoNewline
-    if ($Detail) { Write-Host ('  ' + $Detail) -ForegroundColor DarkGray } else { Write-Host '' }
+    Write-AgentViewConsoleStep $Kind $Text $Detail
 }
 
 # ---------- status ----------

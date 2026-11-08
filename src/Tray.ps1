@@ -170,12 +170,7 @@ function Stop-AgentViewMemoryTrim {
 }
 # Đọc một trường settings (pscustomobject hoặc hashtable); thiếu/null ⇒ mặc định. Settings.ps1 có thể chưa có trường mới.
 function Get-AgentViewSettingValue($Settings, [string]$Name, $Default) {
-    if ($null -eq $Settings) { return $Default }
-    $v = $null
-    if ($Settings -is [System.Collections.IDictionary]) { if ($Settings.Contains($Name)) { $v = $Settings[$Name] } }
-    elseif ($Settings.PSObject.Properties[$Name]) { $v = $Settings.$Name }
-    if ($null -eq $v) { return $Default }
-    return $v
+    Get-AgentViewNotifySetting $Settings $Name $Default
 }
 # Chu kỳ refresh: 60/120/300 giây; giá trị khác hoặc thiếu ⇒ 120.
 function Get-AgentViewRefreshSeconds($Settings) {

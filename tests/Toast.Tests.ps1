@@ -45,7 +45,7 @@ Describe 'Toast pure helpers' {
         Get-AgentViewToastProviderColor 'other' | Should Be (Get-AgentViewTheme)['accent']
     }
     It 'treats a failed busy query as not busy' {
-        Initialize-AgentViewToastNative
+        Initialize-AgentViewNative
         { Test-AgentViewUserBusy } | Should Not Throw
         (Test-AgentViewUserBusy) -is [bool] | Should Be $true
     }

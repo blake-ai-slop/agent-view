@@ -118,7 +118,7 @@ Register-AgentViewStrings -Module 'installer' -Strings @{
 # Tham số: cờ -Yes/-NoAutostart/-Widget/-NoStart/-Quiet hoặc biến môi trường AGENT_VIEW_YES/NO_AUTOSTART/WIDGET/NO_START/QUIET=1.
 # Biến do bootstrap đặt: AGENT_VIEW_SOURCE (nguồn đã chọn), AGENT_VIEW_BOOTSTRAP=1, AGENT_VIEW_INSTALL_SCRIPT (đường dẫn install.ps1 nếu chạy file).
 # Tải hết vào thư mục tạm trước rồi mới thay bản cũ. File này có BOM (tiếng Việt cho PS 5.1) nên KHÔNG được iex trực tiếp.
-$script:AgentViewPayload = @('I18n.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Process.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','SettingsWindow.ps1','History.ps1','Forecast.ps1','Update.ps1','Notify.ps1','Toast.ps1','Version.ps1','Cli.ps1')
+$script:AgentViewPayload = @('I18n.ps1','Ui.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Process.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','SettingsWindow.ps1','History.ps1','Forecast.ps1','Update.ps1','Notify.ps1','Toast.ps1','Version.ps1','Cli.ps1')
 $script:AgentViewDefaultInstallSource = 'https://raw.githubusercontent.com/blake-ai-slop/agent-view/main'
 $script:InstallQuiet = $false
 
@@ -170,11 +170,7 @@ function Read-AgentViewYesNo([string]$Question, [bool]$Default) {
 }
 function Write-InstallStep([string]$Kind, [string]$Text, [string]$Detail) {
     if ($script:InstallQuiet -and $Kind -ne 'fail') { return }
-    $mark = @{ ok='✓'; fail='✗'; skip='–'; info='·' }[$Kind]
-    $color = @{ ok='Green'; fail='Red'; skip='DarkGray'; info='Gray' }[$Kind]
-    Write-Host ('  ' + $mark + ' ') -ForegroundColor $color -NoNewline
-    Write-Host $Text -NoNewline
-    if ($Detail) { Write-Host ('  ' + $Detail) -ForegroundColor DarkGray } else { Write-Host '' }
+    Write-AgentViewConsoleStep $Kind $Text $Detail
 }
 function Write-InstallLine([string]$Text, [string]$Color = 'Gray') { if (-not $script:InstallQuiet) { Write-Host $Text -ForegroundColor $Color } }
 

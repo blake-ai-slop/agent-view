@@ -1,4 +1,4 @@
-# String tables are registered by their owning modules. Loading this file does no IO.
+﻿# String tables are registered by their owning modules. Loading this file does no IO.
 function Register-AgentViewStrings([string]$Module, [hashtable]$Strings) {
     $tables = [AppDomain]::CurrentDomain.GetData('agent-view.strings')
     if ($null -eq $tables) { $tables = @{}; [AppDomain]::CurrentDomain.SetData('agent-view.strings', $tables) }
@@ -40,3 +40,12 @@ function Get-AgentViewText {
     return [string]$value
 }
 Set-Alias -Name T -Value Get-AgentViewText
+
+# Shared console formatting for CLI and installer; neither caller changes localized text.
+function Write-AgentViewConsoleStep([string]$Kind, [string]$Text, [string]$Detail) {
+    $mark = @{ ok='✓'; fail='✗'; skip='–'; info='·' }[$Kind]
+    $color = @{ ok='Green'; fail='Red'; skip='DarkGray'; info='Gray' }[$Kind]
+    Write-Host ('  ' + $mark + ' ') -ForegroundColor $color -NoNewline
+    Write-Host $Text -NoNewline
+    if ($Detail) { Write-Host ('  ' + $Detail) -ForegroundColor DarkGray } else { Write-Host '' }
+}

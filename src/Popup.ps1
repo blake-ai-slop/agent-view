@@ -1,4 +1,4 @@
-﻿. (Join-Path $PSScriptRoot 'I18n.ps1')
+﻿if (-not (Test-Path function:Register-AgentViewStrings)) { . (Join-Path $PSScriptRoot 'I18n.ps1') }
 Register-AgentViewStrings -Module 'popup' -Strings @{
     en = @{
         'refresh' = 'Refresh'
@@ -54,11 +54,10 @@ Register-AgentViewStrings -Module 'popup' -Strings @{
     }
 }
 # Popup quota (thiết kế Bezel mục 02) — WPF trên Windows PowerShell 5.1, sống trong vòng message WinForms của tray.
-# Dot-source chỉ định nghĩa hàm. Hợp đồng: Show-/Update-/Hide-AgentViewPopup, Test-AgentViewPopupOpen.
-. (Join-Path $PSScriptRoot 'Ring.ps1')
-. (Join-Path $PSScriptRoot 'Format.ps1')
-. (Join-Path $PSScriptRoot 'History.ps1')
-. (Join-Path $PSScriptRoot 'Forecast.ps1')
+# Dot-source chỉ định nghĩa hàm. Hợp đồng: Show-/Update-/Hide-/Close-AgentViewPopup, Test-AgentViewPopupOpen, Set-AgentViewPopupUpdate.
+if (-not (Test-Path function:New-AgentRing)) { . (Join-Path $PSScriptRoot 'Ring.ps1') }
+if (-not (Test-Path function:Get-AgentViewHistoryIndex)) { . (Join-Path $PSScriptRoot 'History.ps1') }
+if (-not (Test-Path function:Get-AgentViewForecast)) { . (Join-Path $PSScriptRoot 'Forecast.ps1') }
 
 # ---------------------------------------------------------------- hằng số bố cục (khớp Spec 04)
 function Get-AgentViewPopupMetrics {
@@ -73,14 +72,8 @@ function Get-AgentViewPopupMetrics {
 }
 
 # ---------------------------------------------------------------- hàm thuần (test không cần cửa sổ)
-# Vị trí cửa sổ (đã gồm lề bóng) để mép popup cách góc dưới phải WorkArea 12px.
 function Get-AgentViewPopupPlacement($WorkArea, [double]$WindowHeight) {
-    $m = Get-AgentViewPopupMetrics
-    [pscustomobject]@{
-        Left = $WorkArea.Right - $m.Gap - $m.Width - $m.ShadowLeft
-        Top = $WorkArea.Bottom - $m.Gap + $m.ShadowBottom - $WindowHeight
-        Width = $m.Width + $m.ShadowLeft + $m.ShadowRight
-    }
+    Get-AgentViewCornerPlacement $WorkArea $WindowHeight (Get-AgentViewPopupMetrics)
 }
 
 # Empty-state display rows are separate from collection normalization.
@@ -88,6 +81,13 @@ function Get-AgentViewEmptyRows {
     foreach ($p in @(@('claude', 'Claude Code'), @('codex', 'Codex'))) {
         [pscustomobject]@{ Provider = $p[0]; Name = $p[1]; Ok = $false; Error = (T 'popup.no_data_yet'); FiveHourUsed = $null; WeekUsed = $null; FiveHourResetsAt = $null; WeekResetsAt = $null; FetchedAt = $null }
     }
+}
+
+# Hàng để hiển thị: dàn phẳng chung (Format.ps1); rỗng ⇒ hai thẻ "chưa có dữ liệu".
+function Get-AgentViewDisplayRows($Rows) {
+    $rows = @(ConvertTo-QuotaRows $Rows)
+    if (-not $rows.Count) { $rows = @(Get-AgentViewEmptyRows) }
+    $rows
 }
 
 # Samples: mẫu history đúng provider+cửa sổ; $null ⇒ không dự báo (ForecastKind 'unknown').
@@ -181,32 +181,19 @@ function Get-AgentViewFooterModel($Rows, [switch]$Loading, [datetime]$Now = (Get
     [pscustomobject]@{ Text = $text; Stale = $hasError }
 }
 
-function Expand-AgentViewXaml([string]$Xaml, $Theme) {
-    [regex]::Replace($Xaml, '@@([a-z0-9-]+)@@', { param($m) $Theme[$m.Groups[1].Value] })
-}
-
 # ---------------------------------------------------------------- trạng thái (một popup mỗi tiến trình)
-# Lưu ở AppDomain để handler sự kiện thấy cùng một bản dù được gọi từ scope/closure nào.
 function Get-AgentViewPopupState {
-    $st = [AppDomain]::CurrentDomain.GetData('agent-view.popup')
-    if ($null -eq $st) {
-        $st = @{ Window = $null; Rows = @(); Loading = $false; OnRefresh = $null; OnRetry = $null; OnSettings = $null
-                 UpdateVersion = $null; OnUpdate = $null; Closing = $false; DeactivatedAt = 0; Cards = @{}; WorkArea = $null }
-        [AppDomain]::CurrentDomain.SetData('agent-view.popup', $st)
+    Get-AgentViewUiState 'agent-view.popup' {
+        @{ Window = $null; Rows = @(); Loading = $false; OnRefresh = $null; OnRetry = $null; OnSettings = $null
+           UpdateVersion = $null; OnUpdate = $null; Closing = $false; DeactivatedAt = 0; Cards = @{}; WorkArea = $null; Handlers = @() }
     }
-    $st
 }
 
 # ---------------------------------------------------------------- XAML
-
 function Get-AgentViewPopupXaml {
     $m = Get-AgentViewPopupMetrics
     $w = $m.Width + $m.ShadowLeft + $m.ShadowRight
-    @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-  Title="agent-view" WindowStyle="None" AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False" Topmost="True"
-  ResizeMode="NoResize" SizeToContent="Height" Width="$w" ShowActivated="True" UseLayoutRounding="True"
-  FontFamily="$($m.FontText)" FontSize="12" Foreground="@@av-text@@">
+    $resources = @"
  <Window.Resources>
   <Style x:Key="IconBtn" TargetType="Button">
    <Setter Property="Width" Value="32"/><Setter Property="Height" Value="32"/>
@@ -236,10 +223,8 @@ function Get-AgentViewPopupXaml {
    </ControlTemplate></Setter.Value></Setter>
   </Style>
  </Window.Resources>
- <Border x:Name="Shell" Width="$($m.Width)" Margin="$($m.ShadowLeft),$($m.ShadowTop),$($m.ShadowRight),$($m.ShadowBottom)" CornerRadius="8" BorderThickness="1" BorderBrush="@@av-stroke@@" RenderTransformOrigin="1,1">
-  <Border.Background><LinearGradientBrush MappingMode="Absolute" StartPoint="0,0" EndPoint="0,96"><GradientStop Color="@@av-bg-top@@" Offset="0"/><GradientStop Color="@@av-bg@@" Offset="1"/></LinearGradientBrush></Border.Background>
-  <Border.Effect><DropShadowEffect BlurRadius="32" ShadowDepth="12" Direction="270" Opacity="0.55" Color="Black"/></Border.Effect>
-  <Border.RenderTransform><TransformGroup><ScaleTransform x:Name="ShellScale" ScaleX="1" ScaleY="1"/><TranslateTransform x:Name="ShellShift"/></TransformGroup></Border.RenderTransform>
+"@
+    $body = @"
   <StackPanel>
    <Grid Margin="16,12,10,8">
     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -277,9 +262,12 @@ function Get-AgentViewPopupXaml {
     <TextBlock x:Name="FootText" Margin="8,0,0,0" FontSize="11.5" Foreground="@@av-text-3@@" VerticalAlignment="Center" Typography.NumeralAlignment="Tabular"/>
    </StackPanel>
   </StackPanel>
- </Border>
-</Window>
 "@
+    Get-AgentViewShellXaml -Resources $resources -Body $body `
+        -Window ('Title="agent-view" ShowInTaskbar="False" Topmost="True" SizeToContent="Height" Width="{0}" ShowActivated="True" UseLayoutRounding="True" FontFamily="{1}" FontSize="12" Foreground="@@av-text@@"' -f $w, $m.FontText) `
+        -Shell ('Width="{0}" Margin="{1},{2},{3},{4}" CornerRadius="8" RenderTransformOrigin="1,1"' -f $m.Width, $m.ShadowLeft, $m.ShadowTop, $m.ShadowRight, $m.ShadowBottom) `
+        -Gradient 'MappingMode="Absolute" StartPoint="0,0" EndPoint="0,96"' `
+        -Transform '<Border.RenderTransform><TransformGroup><ScaleTransform x:Name="ShellScale" ScaleX="1" ScaleY="1"/><TranslateTransform x:Name="ShellShift"/></TransformGroup></Border.RenderTransform>'
 }
 
 function Get-AgentViewMeterXaml([string]$Prefix, [string]$Label) {
@@ -377,75 +365,59 @@ function New-AgentViewPopupWindow {
     Initialize-AgentViewWpf
     $st = Get-AgentViewPopupState
     $theme = Get-AgentViewTheme
-    $window = [System.Windows.Markup.XamlReader]::Parse((Expand-AgentViewXaml (Get-AgentViewPopupXaml) $theme))
-    $ui = @{}
-    foreach ($n in 'Shell', 'ShellScale', 'ShellShift', 'BrandRing', 'StatusDot', 'StatusText', 'RefreshBtn', 'RefreshRot', 'SettingsBtn', 'Cards', 'LiveDot', 'FootText', 'UpdateChip', 'UpdateChipText') {
-        $ui[$n] = $window.FindName($n)
-    }
+    $window, $ui = New-AgentViewXamlObject (Get-AgentViewPopupXaml) $theme @('Shell', 'ShellScale', 'ShellShift', 'BrandRing', 'StatusDot', 'StatusText', 'RefreshBtn', 'RefreshRot', 'SettingsBtn', 'Cards', 'LiveDot', 'FootText', 'UpdateChip', 'UpdateChipText')
     $brand = New-AgentRing -Size 16 -Stroke 2.5
     Set-AgentRing -Ring $brand -State ok -Value 76 -DurationMs 0   # dấu thương hiệu tĩnh theo thiết kế
     $ui.BrandRing.Content = $brand
-    $st.Window = $window; $st.Ui = $ui; $st.Theme = $theme; $st.Cards = @{}; $st.Order = @()
+    $st.Window = $window; $st.Ui = $ui; $st.Theme = $theme; $st.Cards = @{}; $st.Order = @(); $st.Handlers = @()
     $st.Shimmer = New-AgentViewShimmerBrush $theme
 
-    $st.DeactivatedHandler = [EventHandler]{
+    Add-AgentViewHandler $st $window 'Deactivated' {
         $s = Get-AgentViewPopupState
         if ($s.Window -and $s.Window.IsVisible -and -not $s.Closing) {
             $s.DeactivatedAt = [Environment]::TickCount
             Hide-AgentViewPopup
         }
     }
-    $window.Add_Deactivated($st.DeactivatedHandler)
-    $window.Add_KeyDown({
+    Add-AgentViewHandler $st $window 'KeyDown' {
         if ($_.Key -eq [System.Windows.Input.Key]::Escape) { $_.Handled = $true; Hide-AgentViewPopup }
-    })
-    $st.ClosingHandler = [System.ComponentModel.CancelEventHandler]{ $_.Cancel = $true; Hide-AgentViewPopup }
-    $window.Add_Closing($st.ClosingHandler)   # Alt+F4 chỉ ẩn, giữ cửa sổ dùng lại
-    $st.SizeChangedHandler = [System.Windows.SizeChangedEventHandler]{
+    }
+    Add-AgentViewHandler $st $window 'Closing' { $_.Cancel = $true; Hide-AgentViewPopup }   # Alt+F4 chỉ ẩn, giữ cửa sổ dùng lại
+    Add-AgentViewHandler $st $window 'SizeChanged' {
         $s = Get-AgentViewPopupState
         if ($s.WorkArea) { $s.Window.Top = (Get-AgentViewPopupPlacement $s.WorkArea $s.Window.ActualHeight).Top }
     }
-    $window.Add_SizeChanged($st.SizeChangedHandler)
-    $ui.RefreshBtn.Add_Click({
+    Add-AgentViewHandler $st $ui.RefreshBtn 'Click' {
         $s = Get-AgentViewPopupState
-        $m = Get-AgentViewPopupMetrics
-        $spin = New-Object System.Windows.Media.Animation.DoubleAnimation 0, 360, (New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($m.SpinMs)))
-        $ease = New-Object System.Windows.Media.Animation.CubicEase; $ease.EasingMode = 'EaseOut'; $spin.EasingFunction = $ease
+        $spin = New-AgentViewDoubleAnimation 0 360 (Get-AgentViewPopupMetrics).SpinMs
         $spin.FillBehavior = [System.Windows.Media.Animation.FillBehavior]::Stop
         $s.Ui.RefreshRot.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $spin)
         if ($s.OnRefresh) { try { & $s.OnRefresh } catch { } }
-    })
-    $ui.SettingsBtn.Add_Click({
-        $s = Get-AgentViewPopupState
-        $cb = $s.OnSettings
+    }
+    Add-AgentViewHandler $st $ui.SettingsBtn 'Click' {
+        $cb = (Get-AgentViewPopupState).OnSettings
         if ($cb) { Hide-AgentViewPopup; try { & $cb } catch { } }
-    })
-    $st.UpdateChipHandler = [System.Windows.Input.MouseButtonEventHandler]{
+    }
+    $ui.UpdateChip.Background = ConvertTo-AgentViewBrush $theme['accent'] 0.14
+    $ui.UpdateChip.BorderBrush = ConvertTo-AgentViewBrush $theme['accent'] 0.5
+    Add-AgentViewHandler $st $ui.UpdateChip 'MouseLeftButtonUp' {
         $_.Handled = $true
         $s = Get-AgentViewPopupState
         $cb = $s.OnUpdate
         if ($cb -and $s.UpdateVersion) { Hide-AgentViewPopup; try { & $cb } catch { } }
     }
-    $ui.UpdateChip.Background = ConvertTo-AgentViewBrush $theme['accent'] 0.14
-    $ui.UpdateChip.BorderBrush = ConvertTo-AgentViewBrush $theme['accent'] 0.5
-    $ui.UpdateChip.Add_MouseLeftButtonUp($st.UpdateChipHandler)
-    $footTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $footTimer.Interval = [TimeSpan]::FromSeconds(20)
-    $footTimer.Add_Tick({ Update-AgentViewPopupText })
-    $st.FootTimer = $footTimer
+    $st.FootTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $st.FootTimer.Interval = [TimeSpan]::FromSeconds(20)
+    Add-AgentViewHandler $st $st.FootTimer 'Tick' { Update-AgentViewPopupText }
     try { [System.Windows.Forms.Integration.ElementHost]::EnableModelessKeyboardInterop($window) } catch { }
     $window
 }
 
 function New-AgentViewCard([string]$Provider) {
     $st = Get-AgentViewPopupState
-    $root = [System.Windows.Markup.XamlReader]::Parse((Expand-AgentViewXaml (Get-AgentViewCardXaml) $st.Theme))
-    $c = @{ Root = $root; Provider = $Provider }
-    foreach ($n in 'Shift', 'RingHost', 'NameText', 'SubText', 'NumWrap', 'BigNum', 'BigPct', 'Meters', 'ErrBox', 'ErrTitle', 'ErrDetail', 'ErrStale', 'RetryBtn',
-                   'FiveBlock', 'WeekBlock', 'MeterGap', 'FiveLine', 'FiveValue', 'FiveTrack', 'FiveFill', 'FiveTicks', 'FiveReset', 'FiveRel', 'FiveAbs', 'FiveForecast',
-                   'WeekLine', 'WeekValue', 'WeekTrack', 'WeekFill', 'WeekTicks', 'WeekReset', 'WeekRel', 'WeekAbs', 'WeekForecast') {
-        $c[$n] = $root.FindName($n)
-    }
+    $root, $c = New-AgentViewXamlObject (Get-AgentViewCardXaml) $st.Theme (@('Shift', 'RingHost', 'NameText', 'SubText', 'NumWrap', 'BigNum', 'BigPct', 'Meters', 'ErrBox', 'ErrTitle', 'ErrDetail', 'ErrStale', 'RetryBtn', 'MeterGap') +
+        @(foreach ($p in 'Five', 'Week') { foreach ($n in 'Block', 'Line', 'Value', 'Track', 'Fill', 'Ticks', 'Reset', 'Rel', 'Abs', 'Forecast') { "$p$n" } }))
+    $c.Root = $root; $c.Provider = $Provider
     $icon = $null; if (@('claude', 'codex') -contains $Provider) { $icon = $Provider }
     $c.Ring = New-AgentRing -Size 60 -Stroke 5 -Ticks -Icon $icon -IconSize 26
     $c.RingHost.Content = $c.Ring
@@ -457,18 +429,6 @@ function New-AgentViewCard([string]$Provider) {
     })
     $root.Tag = $c
     $c
-}
-
-function New-AgentViewDoubleAnimation([double]$From, [double]$To, [double]$Ms, [string]$Ease = 'CubicOut', [double]$DelayMs = 0) {
-    $a = New-Object System.Windows.Media.Animation.DoubleAnimation $From, $To, (New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms)))
-    switch ($Ease) {
-        'CubicOut' { $e = New-Object System.Windows.Media.Animation.CubicEase; $e.EasingMode = 'EaseOut' }
-        'CubicIn' { $e = New-Object System.Windows.Media.Animation.CubicEase; $e.EasingMode = 'EaseIn' }
-        'QuinticOut' { $e = New-Object System.Windows.Media.Animation.QuinticEase; $e.EasingMode = 'EaseOut' }
-    }
-    $a.EasingFunction = $e
-    if ($DelayMs -gt 0) { $a.BeginTime = [TimeSpan]::FromMilliseconds($DelayMs) }
-    $a
 }
 
 # Màu dòng dự báo: 'runout' ⇒ crit nếu cửa sổ đã crit, ngược lại warn; 'enough' ⇒ chữ phụ; 'unknown' ⇒ ẩn.
@@ -497,15 +457,11 @@ function Set-AgentViewMeter($Card, [string]$Prefix, $Window, [string]$State, [st
     $Card["${Prefix}Abs"].Text = [string]$Window.Abs
     Set-AgentViewForecastLine $Card["${Prefix}Forecast"] $Window
     $fill = $Card["${Prefix}Fill"]
-    if ($State -eq 'loading') {
-        $Card["${Prefix}Track"].Background = $st.Shimmer.Brush
-        $fill.Visibility = 'Hidden'; $Card["${Prefix}Ticks"].Visibility = 'Hidden'
-        $Card["${Prefix}Line"].Opacity = 0.35; $Card["${Prefix}Reset"].Opacity = 0.35; $Card["${Prefix}Forecast"].Opacity = 0.35
-        return
-    }
-    $Card["${Prefix}Track"].Background = ConvertTo-AgentViewBrush $st.Theme['av-track']
-    $fill.Visibility = 'Visible'; $Card["${Prefix}Ticks"].Visibility = 'Visible'
-    $Card["${Prefix}Line"].Opacity = 1; $Card["${Prefix}Reset"].Opacity = 1; $Card["${Prefix}Forecast"].Opacity = 1
+    $loading = $State -eq 'loading'
+    $Card["${Prefix}Track"].Background = $(if ($loading) { $st.Shimmer.Brush } else { ConvertTo-AgentViewBrush $st.Theme['av-track'] })
+    $vis = $(if ($loading) { 'Hidden' } else { 'Visible' }); $fill.Visibility = $vis; $Card["${Prefix}Ticks"].Visibility = $vis
+    foreach ($n in 'Line', 'Reset', 'Forecast') { $Card["$Prefix$n"].Opacity = $(if ($loading) { 0.35 } else { 1 }) }
+    if ($loading) { return }
     $colors = Get-AgentViewLevelColors $Window.Level $st.Theme
     $grad = New-Object System.Windows.Media.LinearGradientBrush ((ConvertTo-AgentViewColor $colors.Lv), (ConvertTo-AgentViewColor $colors.Hi), 0.0)
     $grad.Freeze(); $fill.Background = $grad
@@ -527,11 +483,11 @@ function Set-AgentViewCard($Card, $Model, [string]$Mode = 'update') {
     $Card.SubText.Text = $Model.Sub
     $Card.RetryBtn.Tag = $Model.Provider
     $num = $Card.BigNum
-    $Card.FiveBlock.Visibility = $(if ($Model.Five.Present) { 'Visible' } else { 'Collapsed' })
-    $Card.WeekBlock.Visibility = $(if ($Model.Week.Present) { 'Visible' } else { 'Collapsed' })
-    $Card.MeterGap.Visibility = $(if ($Model.Five.Present -and $Model.Week.Present) { 'Visible' } else { 'Collapsed' })
-    $Card.Meters.Visibility = $(if ($Model.State -eq 'error') { 'Collapsed' } else { 'Visible' })
-    $Card.ErrBox.Visibility = $(if ($Model.State -eq 'error') { 'Visible' } else { 'Collapsed' })
+    $Card.FiveBlock.Visibility = Get-AgentViewVisibility $Model.Five.Present
+    $Card.WeekBlock.Visibility = Get-AgentViewVisibility $Model.Week.Present
+    $Card.MeterGap.Visibility = Get-AgentViewVisibility ($Model.Five.Present -and $Model.Week.Present)
+    $Card.Meters.Visibility = Get-AgentViewVisibility ($Model.State -ne 'error')
+    $Card.ErrBox.Visibility = Get-AgentViewVisibility ($Model.State -eq 'error')
     switch ($Model.State) {
         'ok' {
             $Card.NumWrap.Background = $null
@@ -558,9 +514,9 @@ function Set-AgentViewCard($Card, $Model, [string]$Mode = 'update') {
             Set-AgentRing -Ring $Card.Ring -State error
             $Card.ErrTitle.Text = $Model.ErrTitle
             $Card.ErrDetail.Text = $Model.ErrDetail
-            $Card.ErrDetail.Visibility = $(if ($Model.ErrDetail) { 'Visible' } else { 'Collapsed' })
+            $Card.ErrDetail.Visibility = Get-AgentViewVisibility $Model.ErrDetail
             $Card.ErrStale.Text = [string]$Model.Stale
-            $Card.ErrStale.Visibility = $(if ($Model.Stale) { 'Visible' } else { 'Collapsed' })
+            $Card.ErrStale.Visibility = Get-AgentViewVisibility $Model.Stale
         }
     }
     Set-AgentViewMeter $Card 'Five' $Model.Five $Model.State $Mode
@@ -573,7 +529,7 @@ function Set-AgentViewShimmer([bool]$On) {
     if ($On -eq $sh.Running) { return }
     $prop = [System.Windows.Media.TranslateTransform]::XProperty
     if ($On) {
-        $a = New-Object System.Windows.Media.Animation.DoubleAnimation -1, 1, (New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(1200)))
+        $a = New-AgentViewDoubleAnimation -1 1 1200 ''
         $a.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
         $sh.Shift.BeginAnimation($prop, $a)
     } else { $sh.Shift.BeginAnimation($prop, $null) }
@@ -594,11 +550,10 @@ function Update-AgentViewPopupView([string]$Mode = 'update') {
     $st = Get-AgentViewPopupState
     if (-not $st.Window) { return }
     $theme = $st.Theme
-    $rows = @(ConvertTo-QuotaRows $st.Rows)
-    if (-not $rows.Count) { $rows = @(Get-AgentViewEmptyRows) }
+    $rows = @(Get-AgentViewDisplayRows $st.Rows)
     $now = Get-Date
     $history = Get-AgentViewPopupHistory
-    $st.Ui.SettingsBtn.Visibility = $(if ($st.OnSettings) { 'Visible' } else { 'Collapsed' })
+    $st.Ui.SettingsBtn.Visibility = Get-AgentViewVisibility $st.OnSettings
     Update-AgentViewPopupUpdateChip
     $order = @()
     foreach ($row in $rows) {
@@ -629,8 +584,7 @@ function Update-AgentViewPopupView([string]$Mode = 'update') {
 function Update-AgentViewPopupText {
     $st = Get-AgentViewPopupState
     if (-not $st.Window) { return }
-    $rows = @(ConvertTo-QuotaRows $st.Rows)
-    if (-not $rows.Count) { $rows = @(Get-AgentViewEmptyRows) }
+    $rows = @(Get-AgentViewDisplayRows $st.Rows)
     $now = Get-Date
     $foot = Get-AgentViewFooterModel $rows -Loading:$st.Loading -Now $now
     $st.Ui.FootText.Text = $foot.Text
@@ -697,11 +651,8 @@ function Show-AgentViewPopup {
     $w.Show()
     [void]$w.Activate()
 
-    $in = $m.InMs
-    $ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-AgentViewDoubleAnimation 0 1 $in))
-    $ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewDoubleAnimation 12 0 $in))
-    $ui.ShellScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, (New-AgentViewDoubleAnimation 0.985 1 $in))
-    $ui.ShellScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleYProperty, (New-AgentViewDoubleAnimation 0.985 1 $in))
+    $ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-AgentViewDoubleAnimation 0 1 $m.InMs))
+    Start-AgentViewPopupMotion $ui $true
     for ($i = 0; $i -lt $st.Order.Count; $i++) {
         $card = $st.Cards[$st.Order[$i]]
         $delay = $i * $m.CardStaggerMs
@@ -721,50 +672,48 @@ function Update-AgentViewPopup {
     if (Test-AgentViewPopupOpen) { Update-AgentViewPopupView 'update' }
 }
 
+# Khung trượt dọc 12px + thu nhẹ 0.985 (vào: CubicOut InMs; ra: CubicIn OutMs). Độ mờ do người gọi chạy.
+function Start-AgentViewPopupMotion($Ui, [bool]$In) {
+    $m = Get-AgentViewPopupMetrics
+    if ($In) { $ms = $m.InMs; $ease = 'CubicOut'; $y = 12, 0; $k = 0.985, 1 } else { $ms = $m.OutMs; $ease = 'CubicIn'; $y = 0, 12; $k = 1, 0.985 }
+    $Ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewDoubleAnimation $y[0] $y[1] $ms $ease))
+    foreach ($p in [System.Windows.Media.ScaleTransform]::ScaleXProperty, [System.Windows.Media.ScaleTransform]::ScaleYProperty) {
+        $Ui.ShellScale.BeginAnimation($p, (New-AgentViewDoubleAnimation $k[0] $k[1] $ms $ease))
+    }
+}
+
+# Dừng mọi vòng lặp (chân popup, shimmer, vòng đo) để idle CPU ~0.
+function Stop-AgentViewPopupLoops($State) {
+    $State.FootTimer.Stop()
+    Set-AgentViewShimmer $false
+    foreach ($card in $State.Cards.Values) { Suspend-AgentRing $card.Ring }
+}
+
 function Hide-AgentViewPopup {
     $st = Get-AgentViewPopupState
     if (-not (Test-AgentViewPopupOpen)) { return }
-    $m = Get-AgentViewPopupMetrics
     $st.Closing = $true
-    $ui = $st.Ui
-    # Dừng mọi vòng lặp ngay khi bắt đầu ẩn (idle CPU ~0).
-    $st.FootTimer.Stop()
-    Set-AgentViewShimmer $false
-    foreach ($k in @($st.Cards.Keys)) { Suspend-AgentRing $st.Cards[$k].Ring }
-    $out = $m.OutMs
-    $fade = New-AgentViewDoubleAnimation 1 0 $out 'CubicIn'
+    Stop-AgentViewPopupLoops $st
+    $fade = New-AgentViewDoubleAnimation 1 0 (Get-AgentViewPopupMetrics).OutMs 'CubicIn'
     $fade.Add_Completed({
         $s = Get-AgentViewPopupState
-        if ($s.Closing -and $s.Window) { $s.Window.Hide(); $s.Closing = $false; if (Get-Command Request-AgentViewMemoryTrim -ErrorAction SilentlyContinue) { Request-AgentViewMemoryTrim } }
+        if ($s.Closing -and $s.Window) { $s.Window.Hide(); $s.Closing = $false; Request-AgentViewUiTrim }
     })
-    $ui.ShellShift.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-AgentViewDoubleAnimation 0 12 $out 'CubicIn'))
-    $ui.ShellScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, (New-AgentViewDoubleAnimation 1 0.985 $out 'CubicIn'))
-    $ui.ShellScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleYProperty, (New-AgentViewDoubleAnimation 1 0.985 $out 'CubicIn'))
-    $ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)
+    Start-AgentViewPopupMotion $st.Ui $false
+    $st.Ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)
 }
 
-# Permanent disposal for shutdown/tests; normal user close continues to animate and hide.
+# Đóng hẳn (thoát app/test); người dùng đóng thường chỉ ẩn có hoạt ảnh.
 function Close-AgentViewPopup {
     param([switch]$Force)
     if (-not $Force) { Hide-AgentViewPopup; return }
     $st = Get-AgentViewPopupState
     if (-not $st.Window) { return }
-    $w = $st.Window
     $st.Closing = $true
-    $st.FootTimer.Stop()
-    Set-AgentViewShimmer $false
-    foreach ($card in $st.Cards.Values) { Suspend-AgentRing $card.Ring }
-    $w.Remove_Deactivated($st.DeactivatedHandler)
-    $w.Remove_Closing($st.ClosingHandler)
-    $w.Remove_SizeChanged($st.SizeChangedHandler)
-    if ($st.UpdateChipHandler) { $st.Ui.UpdateChip.Remove_MouseLeftButtonUp($st.UpdateChipHandler); $st.UpdateChipHandler = $null }
-    # Remove the fade clock (and its Completed callback) before closing.
+    Stop-AgentViewPopupLoops $st
+    Remove-AgentViewHandlers $st
+    # Gỡ đồng hồ mờ dần (và Completed của nó) trước khi đóng.
     $st.Ui.Shell.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null)
-    $w.Close()
-    # Drain queued layout/close work while the defining PowerShell scope still exists.
-    $w.Dispatcher.Invoke([System.Windows.Threading.DispatcherPriority]::ContextIdle, [Action]{})
-    $st.Window = $null
-    $st.Cards = @{}
-    $st.Ui = @{}
-    $st.Closing = $false
+    Close-AgentViewWindowNow $st.Window
+    $st.Window = $null; $st.Cards = @{}; $st.Ui = @{}; $st.Closing = $false
 }

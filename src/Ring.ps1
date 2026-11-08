@@ -1,21 +1,8 @@
-﻿# Vòng đo dùng chung (popup, widget) — WPF trên Windows PowerShell 5.1.
-# Dot-source chỉ định nghĩa hàm (và nạp Theme.ps1/Format.ps1 cùng thư mục nếu có mà chưa nạp).
-# Hợp đồng: New-AgentRing / Set-AgentRing (tray-bezel, widget gọi); Suspend-/Resume-AgentRing để tắt vòng lặp khi ẩn.
-if (-not (Get-Command Get-AgentViewTheme -ErrorAction SilentlyContinue)) {
-    if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Theme.ps1')) { . (Join-Path $PSScriptRoot 'Theme.ps1') }
-}
-if (-not (Get-Command Get-QuotaLevel -ErrorAction SilentlyContinue)) {
-    if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Format.ps1')) { . (Join-Path $PSScriptRoot 'Format.ps1') }
-}
-
-function Initialize-AgentViewWpf {
-    if (-not ('System.Windows.Media.ArcSegment' -as [type])) {
-        Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
-    }
-    if (-not ('System.Windows.Forms.Integration.ElementHost' -as [type])) {
-        Add-Type -AssemblyName System.Windows.Forms, WindowsFormsIntegration
-    }
-}
+﻿# Vòng đo dùng chung (popup, widget, toast) — WPF trên Windows PowerShell 5.1.
+# Dot-source chỉ định nghĩa hàm (và nạp Ui.ps1/Format.ps1 cùng thư mục nếu chưa nạp).
+# Hợp đồng: New-AgentRing / Set-AgentRing; Suspend-/Resume-AgentRing để tắt vòng lặp khi ẩn.
+if (-not (Test-Path function:Initialize-AgentViewWpf)) { . (Join-Path $PSScriptRoot 'Ui.ps1') }
+if (-not (Test-Path function:Get-QuotaLevel)) { . (Join-Path $PSScriptRoot 'Format.ps1') }
 
 # ---------------------------------------------------------------- hàm thuần (test không cần WPF)
 function Get-AgentRingRadius([double]$Size, [double]$Stroke, [switch]$Ticks) {
@@ -62,13 +49,6 @@ function Get-AgentRingDash([double]$Radius, [double]$Stroke) {
     ,@(($seg * 0.55 / $Stroke), ($seg * 0.45 / $Stroke))
 }
 
-# Hai màu (mức, đuôi gradient) theo mức 'ok'|'warn'|'crit'|'unk'.
-function Get-AgentViewLevelColors([string]$Level, $Theme) {
-    if (-not $Theme) { $Theme = Get-AgentViewTheme }
-    if (@('ok', 'warn', 'crit', 'unk') -notcontains $Level) { $Level = 'unk' }
-    [pscustomobject]@{ Level = $Level; Lv = $Theme[$Level]; Hi = $Theme["$Level-hi"] }
-}
-
 # Kiểu vòng theo trạng thái: màu, rãnh, quầng thở, xoay.
 function Get-AgentRingStyle([string]$State, $Value, $Theme) {
     if (-not $Theme) { $Theme = Get-AgentViewTheme }
@@ -88,15 +68,6 @@ function Get-AgentRingStyle([string]$State, $Value, $Theme) {
 }
 
 # ---------------------------------------------------------------- dựng WPF
-function ConvertTo-AgentViewBrush([string]$Hex, [double]$Opacity = 1) {
-    $brush = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Hex))
-    if ($Opacity -lt 1) { $brush.Opacity = $Opacity }
-    $brush.Freeze(); $brush
-}
-function ConvertTo-AgentViewColor([string]$Hex, [byte]$Alpha = 255) {
-    $c = [System.Windows.Media.ColorConverter]::ConvertFromString($Hex)
-    [System.Windows.Media.Color]::FromArgb($Alpha, $c.R, $c.G, $c.B)
-}
 
 # Biểu tượng tự vẽ (placeholder theo thiết kế SVG, không phải logo chính thức), hệ toạ độ 24×24.
 function New-AgentRingIcon([string]$Icon, [double]$IconSize, $Theme) {
@@ -160,13 +131,7 @@ function New-AgentRing {
     $track.Data = New-Object System.Windows.Media.EllipseGeometry ((New-Object System.Windows.Point $c, $c), $r, $r)
     $track.StrokeThickness = $Stroke
 
-    $figure = New-Object System.Windows.Media.PathFigure
-    $figure.IsClosed = $false; $figure.IsFilled = $false
-    $pathGeo = New-Object System.Windows.Media.PathGeometry
-    $pathGeo.Figures.Add($figure)
-    $arc = New-Object System.Windows.Shapes.Path
-    $arc.Data = $pathGeo; $arc.StrokeThickness = $Stroke
-    $arc.StrokeStartLineCap = $round; $arc.StrokeEndLineCap = $round
+    $arc = New-AgentArcPath $Stroke
 
     [void]$canvas.Children.Add($track); [void]$canvas.Children.Add($arc)
     $tickLines = @()
@@ -192,27 +157,42 @@ function New-AgentRing {
 
     [void]$root.Children.Add($glow); [void]$root.Children.Add($canvas); [void]$root.Children.Add($centerHost)
     $root.Tag = @{
-        Kind = 'AgentRing'; Size = $Size; Stroke = $Stroke; Center = $c; Radius = $r; Theme = $theme
-        Root = $root; Glow = $glow; GlowScale = $glowScale; Canvas = $canvas; Rotate = $rotate
-        Track = $track; Arc = $arc; Figure = $figure; Ticks = $tickLines; CenterHost = $centerHost; Icon = $iconEl
+        Size = $Size; Stroke = $Stroke; Center = $c; Radius = $r; Theme = $theme
+        Glow = $glow; GlowScale = $glowScale; Rotate = $rotate
+        Track = $track; Arc = $arc; Figure = $arc.Data.Figures[0]; Ticks = $tickLines; CenterHost = $centerHost; Icon = $iconEl
         State = 'error'; Value = 0.0; Style = $null; Timer = $null; Suspended = $false
     }
     Set-AgentRing -Ring $root -State 'error'
     $root
 }
 
-# Dựng lại hình học cung ở giá trị v (0..100).
-function Update-AgentRingArc($RingState, [double]$Value) {
-    $plan = Get-AgentArcPlan $RingState.Center $RingState.Radius $Value
-    $fig = $RingState.Figure
-    $fig.StartPoint = New-Object System.Windows.Point $plan.Start.X, $plan.Start.Y
-    $fig.Segments.Clear()
-    $size = New-Object System.Windows.Size $RingState.Radius, $RingState.Radius
+# Path cung (đầu tròn) với một PathFigure mở; hình học do Set-AgentArcFigure dựng.
+function New-AgentArcPath([double]$Stroke) {
+    $figure = New-Object System.Windows.Media.PathFigure
+    $figure.IsClosed = $false; $figure.IsFilled = $false
+    $geo = New-Object System.Windows.Media.PathGeometry
+    $geo.Figures.Add($figure)
+    $arc = New-Object System.Windows.Shapes.Path
+    $arc.Data = $geo; $arc.StrokeThickness = $Stroke
+    $arc.StrokeStartLineCap = 'Round'; $arc.StrokeEndLineCap = 'Round'
+    $arc
+}
+
+# Dựng hình học cung ở giá trị v (0..100); trả về cung có đủ dài để hiện không.
+function Set-AgentArcFigure($Figure, [double]$Center, [double]$Radius, [double]$Value) {
+    $plan = Get-AgentArcPlan $Center $Radius $Value
+    $Figure.StartPoint = New-Object System.Windows.Point $plan.Start.X, $plan.Start.Y
+    $Figure.Segments.Clear()
+    $size = New-Object System.Windows.Size $Radius, $Radius
     foreach ($s in $plan.Segments) {
-        $seg = New-Object System.Windows.Media.ArcSegment ((New-Object System.Windows.Point $s.Point.X, $s.Point.Y), $size, 0, $s.IsLargeArc, ([System.Windows.Media.SweepDirection]::Clockwise), $true)
-        $fig.Segments.Add($seg)
+        $Figure.Segments.Add((New-Object System.Windows.Media.ArcSegment ((New-Object System.Windows.Point $s.Point.X, $s.Point.Y), $size, 0, $s.IsLargeArc, ([System.Windows.Media.SweepDirection]::Clockwise), $true)))
     }
-    $RingState.Arc.Opacity = $(if ($plan.Visible) { 1 } else { 0 })
+    $plan.Visible
+}
+
+function Update-AgentRingArc($RingState, [double]$Value) {
+    $visible = Set-AgentArcFigure $RingState.Figure $RingState.Center $RingState.Radius $Value
+    $RingState.Arc.Opacity = $(if ($visible) { 1 } else { 0 })
 }
 
 function Stop-AgentRingLoops($RingState) {
@@ -239,7 +219,7 @@ function Start-AgentRingLoops($RingState) {
         $RingState.GlowScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleYProperty, $sc)
     }
     if ($style.Spin) {
-        $spin = New-Object System.Windows.Media.Animation.DoubleAnimation 0, 360, (New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(1000)))
+        $spin = New-AgentViewDoubleAnimation 0 360 1000 ''
         $spin.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
         $RingState.Rotate.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $spin)
     }

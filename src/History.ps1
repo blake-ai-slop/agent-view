@@ -74,8 +74,7 @@ function Read-AgentViewHistoryFile([string]$Path) {
     $groups = @{}; $order = New-Object 'System.Collections.Generic.List[string]'; $max = ''
     foreach ($s in $raw) {
         if ($null -eq $s -or -not ($s -is [Collections.IDictionary] -or $s -is [pscustomobject])) { continue }
-        if ($s -is [Collections.IDictionary]) { $p = $s['p']; $w = $s['w']; $u = $s['u']; $t = $s['t']; $r = $s['r'] }
-        else { $p = $s.p; $w = $s.w; $u = $s.u; $t = $s.t; $r = $s.r }
+        $p = $s.p; $w = $s.w; $u = $s.u; $t = $s.t; $r = $s.r
         if ($p -isnot [string] -or ($w -ne '5h' -and $w -ne 'week') -or $null -eq $u -or $u -isnot [ValueType]) { continue }
         if (-not ($t -is [string] -and $t.Length -eq 20 -and [datetime]::TryParseExact($t, $fmt, $inv, $styles, [ref]$d))) {
             $t = ConvertTo-AgentViewUtcText $t
@@ -127,9 +126,9 @@ function Get-AgentViewHistoryEntry([string]$Path) {
     $stamp = Get-AgentViewHistoryStamp $Path
     $e = $script:AgentViewHistoryCache[$Path]
     if ($null -ne $e -and $e.Stamp -eq $stamp) { return $e }
-    $loads = 1; $written = $false; $lastWrite = $null
-    if ($null -ne $e) { $loads = $e.Loads + 1; $written = $e.Written; $lastWrite = $e.LastWrite }
-    $e = @{ Series = (Read-AgentViewHistoryFile $Path); Stamp = $stamp; Dirty = $false; Written = $written; LastWrite = $lastWrite; Loads = $loads }
+    $loads = 1; $lastWrite = $null
+    if ($null -ne $e) { $loads = $e.Loads + 1; $lastWrite = $e.LastWrite }
+    $e = @{ Series = (Read-AgentViewHistoryFile $Path); Stamp = $stamp; Dirty = $false; LastWrite = $lastWrite; Loads = $loads }
     $script:AgentViewHistoryCache[$Path] = $e
     return $e
 }
@@ -200,7 +199,7 @@ function Save-AgentViewHistory([string]$Path = (Get-AgentViewHistoryPath), [swit
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Path))
         [IO.File]::WriteAllText($temp, $json, (New-Object Text.UTF8Encoding $false))
         Move-Item -LiteralPath $temp -Destination $Path -Force -ErrorAction Stop
-        $e.Stamp = Get-AgentViewHistoryStamp $Path; $e.Dirty = $false; $e.Written = $true; $ok = $true
+        $e.Stamp = Get-AgentViewHistoryStamp $Path; $e.Dirty = $false; $ok = $true
     } catch {
     } finally {
         if ([IO.File]::Exists($temp)) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }

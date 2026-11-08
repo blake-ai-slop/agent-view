@@ -265,7 +265,7 @@ function Read-QuotaTextFile([string]$Path) {
   catch { return $null }
 }
 
-# AppDomain tồn tại suốt phiên app dù Tray tạo runspace mới ở mỗi refresh.
+# AppDomain chia sẻ throttle giữa các runspace trong cùng phiên app.
 # Chỉ giữ thời điểm thử lại/lỗi chung, không giữ phản hồi hay dữ liệu tài khoản.
 function Get-ClaudeFallbackState {
   $domain = [AppDomain]::CurrentDomain
@@ -386,8 +386,6 @@ function Get-AgentQuotas {
   param([hashtable]$Ops)
   $all = New-QuotaOps
   if ($Ops) { foreach ($k in @($Ops.Keys)) { $all[$k] = $Ops[$k] } }
-  $out = New-Object System.Collections.ArrayList
-  $null = $out.Add((Get-ClaudeQuota $all))
-  $null = $out.Add((Get-CodexQuota $all))
-  return $out.ToArray()  # không unary comma: pipeline nhận từng quota; gán biến vẫn ra mảng 2 phần tử
+  Get-ClaudeQuota $all
+  Get-CodexQuota $all
 }

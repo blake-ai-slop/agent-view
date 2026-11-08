@@ -51,12 +51,7 @@ function Read-AgentViewUpdateState([string]$Path = (Join-Path $env:LOCALAPPDATA 
  } catch { return $null }
 }
 function Save-AgentViewUpdateState($State, [string]$Path = (Join-Path $env:LOCALAPPDATA 'agent-view/update-state.json')) {
- $temp=$Path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
- try {
-  [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Path))
-  [IO.File]::WriteAllText($temp,($State | ConvertTo-Json),(New-Object Text.UTF8Encoding $true))
-  Move-Item -LiteralPath $temp -Destination $Path -Force -ErrorAction Stop
- } finally { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force } }
+ Save-AgentViewSettings $State $Path
 }
 function Invoke-AgentViewUpdateCheck {
  param([switch]$Force, [datetime]$Now = (Get-Date), $Settings = (Get-AgentViewSettings), [scriptblock]$Fetch = { param($url) Get-AgentViewLatestRelease -ApiUrl $url })
