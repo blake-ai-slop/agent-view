@@ -1,5 +1,14 @@
 ﻿# Changelog
 
+## v0.2.4
+
+### Changed
+
+- Lower CPU use: the Codex rate-limit query (which starts a Codex CLI process) now runs at most once every 5 minutes instead of on every refresh, cutting it from about 30 to about 10 times an hour. Between queries the last result is shown, and a window whose reset time has passed is shown as full again. Choosing refresh from the tray menu or the popup still queries Codex right away (if the last query was at least 30 seconds ago).
+- Smarter refresh: the app refreshes less often while you are away (no keyboard or mouse input for 10 minutes, or the screen is locked) and refreshes as soon as you are back; it also refreshes shortly after Claude Code updates its cached usage, and right when a window resets, so the icon and the "full again" notification appear on time.
+- Background refreshes no longer show the loading animation on the tray icon, popup, or widget; the numbers simply update when new data arrives. The first refresh after start-up and refreshes you start yourself still show it.
+- The red tray icon blinks for about a minute after a window becomes critical instead of blinking indefinitely, and the widget's repeating ring animations run at a lower frame rate (about 60% less CPU while the widget is visible), with no visible change.
+
 ## v0.2.3
 
 ### Changed

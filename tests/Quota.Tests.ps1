@@ -7,6 +7,7 @@ $fx = Join-Path $here 'fixtures'
 function New-TestOps([hashtable]$Over) {
   $ops = @{
     FallbackState = @{}
+    CodexState    = @{}
     Now      = { [DateTime]::SpecifyKind((New-Object DateTime 2026, 11, 7, 12, 0, 0), 'Local') }
     GetEnv   = { param($n) $null }
     HomeDir  = { 'C:\home' }
@@ -408,7 +409,7 @@ Describe 'Claude stale cache and fallback retry' {
   It 'resets only elapsed present windows, including a fresh cache at the boundary' {
     $at = Get-Date
     $cache = @{ FiveHour=53; Week=12; FiveHourResetsAt=$at; WeekResetsAt=$at.AddDays(1); FetchedAt=$at.AddMinutes(-1) }
-    $r = Reset-ClaudeCachedWindows $cache $at
+    $r = Reset-QuotaElapsedWindows $cache $at
     $r.FiveHour | Should Be 0
     $r.FiveHourResetsAt | Should BeNullOrEmpty
     $r.Week | Should Be 12
@@ -416,7 +417,7 @@ Describe 'Claude stale cache and fallback retry' {
     $r.FetchedAt | Should Be $cache.FetchedAt
     $cache.FiveHour | Should Be 53
     $cache.FiveHour=$null; $cache.FiveHourResetsAt=$null
-    $r = Reset-ClaudeCachedWindows $cache $at.AddDays(2)
+    $r = Reset-QuotaElapsedWindows $cache $at.AddDays(2)
     $r.FiveHour | Should BeNullOrEmpty
     $r.Week | Should Be 0
     $r.WeekResetsAt | Should BeNullOrEmpty
@@ -645,5 +646,206 @@ Describe 'Claude print refresh reads cache again' {
     }.GetNewClosure()
     (Get-ClaudeQuota $ops).Ok | Should Be $true
     $clock.Calls | Should Be 1
+  }
+}
+
+Describe 'Codex app-server throttle' {
+  # Giờ fixture: cửa sổ 5h (42%) reset 2026-11-07T14:25:34Z, tuần (2%) reset 2026-11-14.
+  $base = ConvertFrom-QuotaEpoch ([long]1794045921071) -Milliseconds
+  $codexLines = [IO.File]::ReadAllLines("$fx\codex-reply.jsonl")
+
+  function New-CodexOps($Clock, $Lines, [hashtable]$Over) {
+    $ops = New-TestOps @{
+      Now  = { $Clock.Now }.GetNewClosure()
+      Find = { param($n) if ($n -eq 'codex') { 'C:\bin\codex.exe' } }
+      Run  = { param($i, $s, $o, $t)
+        $Clock.Calls++
+        if ($i.ArgList[0] -ne 'app-server') { throw 'sai lệnh' }
+        switch ($Clock.Mode) {
+          'timeout' { return @{ TimedOut = $true; ExitCode = $null; Lines = @() } }
+          'garbage' { return @{ TimedOut = $false; ExitCode = 1; Lines = @('rác') } }
+          'throw'   { throw 'CLI failed' }
+          default   { return @{ TimedOut = $false; ExitCode = $null; Lines = $Lines } }
+        }
+      }.GetNewClosure()
+    }
+    if ($Over) { foreach ($k in $Over.Keys) { $ops[$k] = $Over[$k] } }
+    return $ops
+  }
+
+  It 'lần 2 trong 5 phút không gọi app-server, trả kết quả cũ với FetchedAt thật; đủ 5 phút gọi lại' {
+    $clock = @{ Now = $base; Calls = 0; Mode = 'ok' }
+    $ops = New-CodexOps $clock $codexLines
+    $q = Get-CodexQuota $ops
+    $q.Ok | Should Be $true; $q.FiveHourUsed | Should Be 42; $q.FetchedAt | Should Be $base
+    $clock.Now = $base.AddMinutes(5).AddMilliseconds(-1)
+    $q = Get-CodexQuota $ops
+    $clock.Calls | Should Be 1
+    $q.Ok | Should Be $true; $q.FiveHourUsed | Should Be 42; $q.WeekUsed | Should Be 2
+    $q.FetchedAt | Should Be $base
+    @($q.PSObject.Properties.Name) -join ',' | Should Be 'Provider,Name,Ok,Error,FiveHourUsed,WeekUsed,FiveHourResetsAt,WeekResetsAt,FetchedAt'
+    $clock.Now = $base.AddMinutes(5)
+    (Get-CodexQuota $ops).FetchedAt | Should Be $base.AddMinutes(5)
+    $clock.Calls | Should Be 2
+  }
+
+  It 'throttle mọi kết quả: timeout, phản hồi rác, ném lỗi ⇒ trả lỗi lần gọi cuối, không gọi lại trong 5 phút' {
+    foreach ($case in @(@('timeout', 'hết thời gian'), @('garbage', 'không đọc được'), @('throw', 'không đọc được'))) {
+      $clock = @{ Now = $base; Calls = 0; Mode = $case[0] }
+      $ops = New-CodexOps $clock $codexLines
+      (Get-CodexQuota $ops).Error | Should Be $case[1]
+      $clock.Now = $base.AddMinutes(4)
+      $q = Get-CodexQuota $ops
+      $q.Ok | Should Be $false; $q.Error | Should Be $case[1]
+      $clock.Calls | Should Be 1
+      $clock.Now = $base.AddMinutes(5)
+      $clock.Mode = 'ok'
+      (Get-CodexQuota $ops).Ok | Should Be $true
+      $clock.Calls | Should Be 2
+    }
+  }
+
+  It 'lỗi sau khi đã có kết quả ⇒ dùng kết quả cũ với FetchedAt cũ, lần gọi lỗi vẫn bị throttle' {
+    $clock = @{ Now = $base; Calls = 0; Mode = 'ok' }
+    $ops = New-CodexOps $clock $codexLines
+    $null = Get-CodexQuota $ops
+    $clock.Now = $base.AddMinutes(10); $clock.Mode = 'timeout'
+    $q = Get-CodexQuota $ops
+    $q.Ok | Should Be $true; $q.FiveHourUsed | Should Be 42; $q.FetchedAt | Should Be $base
+    $clock.Now = $base.AddMinutes(14)
+    (Get-CodexQuota $ops).FetchedAt | Should Be $base
+    $clock.Calls | Should Be 2
+  }
+
+  It 'qua resets_at ⇒ cửa sổ đó 0% đã dùng, reset null; cửa sổ còn lại giữ nguyên' {
+    $clock = @{ Now = $base; Calls = 0; Mode = 'ok' }
+    $ops = New-CodexOps $clock $codexLines
+    $first = Get-CodexQuota $ops
+    $clock.Now = $first.FiveHourResetsAt; $clock.Mode = 'timeout'
+    $q = Get-CodexQuota $ops
+    $q.Ok | Should Be $true
+    $q.FiveHourUsed | Should Be 0
+    $q.FiveHourResetsAt | Should BeNullOrEmpty
+    $q.WeekUsed | Should Be 2
+    $q.WeekResetsAt | Should Be $first.WeekResetsAt
+    $q.FetchedAt | Should Be $base
+  }
+
+  It 'kết quả cũ dùng tối đa 7 ngày, quá ⇒ lỗi lần gọi cuối' {
+    $clock = @{ Now = $base; Calls = 0; Mode = 'ok' }
+    $ops = New-CodexOps $clock $codexLines
+    $null = Get-CodexQuota $ops
+    $clock.Mode = 'timeout'; $clock.Now = $base.AddDays(7).AddMinutes(-1)
+    (Get-CodexQuota $ops).Ok | Should Be $true
+    $clock.Now = $base.AddDays(7).AddMilliseconds(1)
+    $q = Get-CodexQuota $ops
+    $q.Ok | Should Be $false
+    $q.Error | Should Be 'hết thời gian'
+    $q.FiveHourUsed | Should BeNullOrEmpty
+  }
+
+  It '-Manual gọi lại khi lần trước ≥30 s, <30 s thì không' {
+    $clock = @{ Now = $base; Calls = 0; Mode = 'ok' }
+    $ops = New-CodexOps $clock $codexLines
+    $null = Get-AgentQuotas -Ops $ops -Manual
+    $clock.Calls | Should Be 1
+    $clock.Now = $base.AddSeconds(29)
+    (Get-AgentQuotas -Ops $ops -Manual)[1].FetchedAt | Should Be $base
+    $clock.Calls | Should Be 1
+    $clock.Now = $base.AddSeconds(30)
+    (Get-AgentQuotas -Ops $ops -Manual)[1].FetchedAt | Should Be $base.AddSeconds(30)
+    $clock.Calls | Should Be 2
+    $clock.Now = $base.AddSeconds(90)
+    $null = Get-AgentQuotas -Ops $ops
+    $clock.Calls | Should Be 2
+  }
+
+  It '-Manual không làm Claude gọi /usage sớm hơn 5 phút' {
+    $clock = @{ Now = $base.AddHours(1); Calls = 0; Claude = 0; Mode = 'ok' }
+    $text = [IO.File]::ReadAllText("$fx\claude.json")
+    $lines = $codexLines
+    $ops = New-TestOps @{
+      Now      = { $clock.Now }.GetNewClosure()
+      ReadText = { param($p) $text }.GetNewClosure()
+      Find     = { param($n) "C:\bin\$n.exe" }
+      Run      = { param($i, $s, $o, $t)
+        if ($i.File -eq 'C:\bin\claude.exe') { $clock.Claude++; return @{ ExitCode = 0; TimedOut = $false; Lines = @('{"num_turns":0,"is_error":false,"result":""}') } }
+        $clock.Calls++; @{ TimedOut = $false; ExitCode = $null; Lines = $lines } }.GetNewClosure()
+    }
+    $null = Get-AgentQuotas -Ops $ops -Manual
+    $clock.Now = $clock.Now.AddMinutes(1)
+    $q = Get-AgentQuotas -Ops $ops -Manual
+    $q.Count | Should Be 2
+    $q[0].Provider | Should Be 'claude'; $q[1].Provider | Should Be 'codex'
+    $clock.Claude | Should Be 1
+    $clock.Calls | Should Be 2
+  }
+
+  It 'state riêng theo đường dẫn CLI + CODEX_HOME' {
+    $clock = @{ Now = $base; Calls = 0; Mode = 'ok'; Home = 'D:\codex-a' }
+    $ops = New-CodexOps $clock $codexLines @{ GetEnv = { param($n) if ($n -eq 'CODEX_HOME') { $clock.Home } }.GetNewClosure() }
+    $null = Get-CodexQuota $ops
+    $null = Get-CodexQuota $ops
+    $clock.Calls | Should Be 1
+    $clock.Home = 'D:\codex-b'
+    $null = Get-CodexQuota $ops
+    $clock.Calls | Should Be 2
+    $clock.Home = $null
+    $null = Get-CodexQuota $ops
+    $clock.Calls | Should Be 3
+    $ops.CodexState.Count | Should Be 3
+  }
+
+  It 'đặt lịch trước khi chạy app-server: lời gọi chồng không chạy lần hai' {
+    $clock = @{ Now = $base; Calls = 0; Mode = 'ok'; Inner = $null }
+    $ops = New-CodexOps $clock $codexLines
+    $invoke = Get-Command Get-CodexQuota
+    $lines = $codexLines
+    $ops.Run = { param($i, $s, $o, $t)
+      $clock.Calls++
+      if ($clock.Calls -gt 1) { throw 'overlapping app-server' }
+      $clock.Inner = & $invoke $ops
+      @{ TimedOut = $false; ExitCode = $null; Lines = $lines }
+    }.GetNewClosure()
+    (Get-CodexQuota $ops).Ok | Should Be $true
+    $clock.Calls | Should Be 1
+    $clock.Inner.Ok | Should Be $false
+    $clock.Inner.Error | Should Be 'không đọc được'
+  }
+
+  It 'hai runspace song song dùng state AppDomain thật chỉ chạy app-server 1 lần; dọn key sau test' {
+    $path = Join-Path $here '..\src\Quota.ps1'
+    $cli = 'C:\fake\codex-' + [Guid]::NewGuid().ToString('N') + '.exe'
+    $calls = [Collections.ArrayList]::Synchronized((New-Object Collections.ArrayList))
+    $lines = $codexLines
+    $jobs = @()
+    try {
+      foreach ($n in 1..2) {
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({ param($path, $cli, $calls, $lines)
+          . $path
+          Set-AgentViewLanguage vi
+          $ops = @{
+            Find = { param($n) if ($n -eq 'codex') { $cli } }.GetNewClosure()
+            ReadText = { param($p) $null }
+            GetEnv = { param($n) $null }
+            Run = { param($i, $s, $o, $t) [void]$calls.Add(1); Start-Sleep -Milliseconds 800; @{ TimedOut = $false; ExitCode = $null; Lines = $lines } }.GetNewClosure()
+          }
+          @(Get-AgentQuotas -Ops $ops)[1]
+        }).AddArgument($path).AddArgument($cli).AddArgument($calls).AddArgument($lines)
+        $jobs += @{ PS = $ps; Handle = $ps.BeginInvoke() }
+      }
+      $rows = foreach ($j in $jobs) { @($j.PS.EndInvoke($j.Handle))[0] }
+      $calls.Count | Should Be 1
+      @($rows | Where-Object { $_.Provider -eq 'codex' }).Count | Should Be 2
+      @($rows | Where-Object { $_.Ok }).Count | Should BeGreaterThan 0
+      (Get-CodexState).ContainsKey("$cli|") | Should Be $true
+    }
+    finally {
+      foreach ($j in $jobs) { $j.PS.Dispose() }
+      $state = Get-CodexState
+      foreach ($k in @($state.Keys)) { if ("$k".StartsWith($cli)) { $state.Remove($k) } }
+    }
+    (Get-CodexState).ContainsKey("$cli|") | Should Be $false
   }
 }

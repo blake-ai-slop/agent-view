@@ -149,3 +149,122 @@ function Get-AgentQuotas {
         } finally { Reset-AgentViewRefreshRunspace $tray.State }
     }
 }
+
+Describe 'Adaptive refresh schedule' {
+    $now = [datetime]'2026-11-20T12:00:00'
+    It 'uses normal cadence, extends idle cadence, and resumes immediately' {
+        $s = @{Last=$now; RefreshSeconds=120}
+        (Get-AgentViewNextRefresh $s $now 0).At | Should Be $now.AddSeconds(120)
+        (Get-AgentViewNextRefresh $s $now 600001).At | Should Be $now.AddSeconds(600)
+        (Get-AgentViewNextRefresh $s $now.AddSeconds(180) 600001).Due | Should Be $false
+        (Get-AgentViewNextRefresh $s $now.AddSeconds(180) 0).Due | Should Be $true
+    }
+    It 'coalesces cache changes until the sixty second minimum' {
+        $s = @{Last=$now; RefreshSeconds=120; CacheChanged=$true}
+        $p = Get-AgentViewNextRefresh $s $now.AddSeconds(59)
+        $p.Due | Should Be $false; $p.At | Should Be $now.AddSeconds(60); $p.Reason | Should Be 'cache'
+        (Get-AgentViewNextRefresh $s $now.AddSeconds(60)).Due | Should Be $true
+    }
+    It 'refreshes five seconds after the nearest future reset including hidden rows' {
+        $a = New-TestRow 10 20; $a.FiveHourResetsAt=$now.AddSeconds(-1); $a.WeekResetsAt=$now.AddSeconds(30)
+        $b = New-TestRow 90 20; $b.FiveHourResetsAt=$now.AddSeconds(20); $b.WeekResetsAt=$null
+        $reset = Get-AgentViewResetRefreshAt @($a,$b) $now
+        $reset | Should Be $now.AddSeconds(25)
+        $s = @{Last=$now; RefreshSeconds=120; ResetAt=$reset}
+        (Get-AgentViewNextRefresh $s $now).Reason | Should Be 'reset'
+        (Get-AgentViewNextRefresh $s $now.AddSeconds(25)).Due | Should Be $true
+        $a.WeekResetsAt=$now.AddSeconds(-5)
+        Get-AgentViewResetRefreshAt @($a) $now | Should Be $null
+    }
+    It 'polls only metadata every five seconds and preserves a pending change' {
+        $script:cacheStamp = $now
+        function Get-ClaudeConfigPath { 'fake-cache' }
+        Mock Get-ClaudeConfigPath { 'fake-cache' }
+        Mock Get-Item { [pscustomobject]@{LastWriteTimeUtc=$script:cacheStamp} }
+        $s = @{}
+        Update-AgentViewCacheStamp $s $now
+        $s.CacheChanged | Should Not Be $true
+        $script:cacheStamp = $now.AddSeconds(1)
+        Update-AgentViewCacheStamp $s $now.AddSeconds(4)
+        $s.CacheChanged | Should Not Be $true
+        Update-AgentViewCacheStamp $s $now.AddSeconds(5)
+        $s.CacheChanged | Should Be $true
+        Update-AgentViewCacheStamp $s $now.AddSeconds(10)
+        $s.CacheChanged | Should Be $true
+        Assert-MockCalled Get-Item -Times 3 -Exactly
+    }
+}
+Describe 'Refresh loading and manual contract' {
+    function New-AdaptiveTray($Path) {
+        $animation = @{Interval=400; Running=$false}
+        $animation | Add-Member ScriptMethod Start { $this.Running=$true }
+        $animation | Add-Member ScriptMethod Stop { $this.Running=$false }
+        @{ State=@{Rows=@();View=@();Worker=$null;Pending=$null;Runspace=$null;QuotaPath=$Path;Last=(Get-Date).AddMinutes(-2);Frame=0;Loading=$false}; Animation=$animation; Notify=$null }
+    }
+    function Wait-AdaptiveRefresh($Tray) {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $Tray.State.Pending.IsCompleted -and $sw.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Milliseconds 10 }
+        @(Receive-AgentViewRefresh $Tray)
+    }
+    BeforeEach {
+        Mock Update-AgentViewPopup { }
+        Mock Update-AgentViewWidget { }
+        Mock Update-AgentViewTrayIcon { }
+        Mock Invoke-AgentViewRefreshHooks { }
+        Mock Request-AgentViewMemoryTrim { }
+    }
+    It 'keeps automatic refresh quiet and shows loading for manual and initial refresh' {
+        $path = Join-Path $TestDrive 'manual-quota.ps1'
+        [IO.File]::WriteAllText($path, 'function Set-AgentViewLanguage($Language) {}; function Get-AgentQuotas { param([switch]$Manual) [pscustomobject]@{Provider="codex";Ok=$false;Error=[string][bool]$Manual} }')
+        $tray = New-AdaptiveTray $path
+        try {
+            Start-AgentViewRefresh $tray
+            $tray.State.Loading | Should Be $false
+            $tray.Animation.Running | Should Be $false
+            $rows = @(Wait-AdaptiveRefresh $tray); $rows[0].Error | Should Be 'False'
+            Assert-MockCalled Update-AgentViewPopup -Times 0 -Exactly
+            Assert-MockCalled Update-AgentViewWidget -Times 0 -Exactly
+            Start-AgentViewRefresh $tray -Manual
+            $tray.State.Loading | Should Be $true
+            $tray.Animation.Interval | Should Be 125
+            $tray.Animation.Running | Should Be $true
+            $rows = @(Wait-AdaptiveRefresh $tray); $rows[0].Error | Should Be 'True'
+            Assert-MockCalled Update-AgentViewPopup -Times 1 -Exactly -ParameterFilter {$Loading}
+            Assert-MockCalled Update-AgentViewWidget -Times 1 -Exactly -ParameterFilter {$Loading}
+            $tray.State.Last = [datetime]::MinValue
+            Start-AgentViewRefresh $tray
+            $tray.State.Loading | Should Be $true
+            $rows = @(Wait-AdaptiveRefresh $tray); $rows[0].Error | Should Be 'False'
+        } finally { Reset-AgentViewRefreshRunspace $tray.State }
+    }
+    It 'supports old quota commands without a Manual parameter' {
+        $path = Join-Path $TestDrive 'old-quota.ps1'
+        [IO.File]::WriteAllText($path, 'function Set-AgentViewLanguage($Language) {}; function Get-AgentQuotas { [CmdletBinding()] param() [pscustomobject]@{Provider="codex";Ok=$false;Error="old"} }')
+        $tray = New-AdaptiveTray $path
+        try {
+            Start-AgentViewRefresh $tray -Manual
+            $rows = @(Wait-AdaptiveRefresh $tray); $rows[0].Error | Should Be 'old'
+        } finally { Reset-AgentViewRefreshRunspace $tray.State }
+    }
+    It 'stops critical blinking after sixty seconds and restarts only on entry or manual refresh' {
+        $now = [datetime]'2026-11-20T12:00:00'
+        $tray = New-AdaptiveTray ''; $s=$tray.State
+        $row=New-TestRow 95 0
+        Complete-AgentViewRefresh $tray @($row) $now
+        $s.CritUntil | Should Be $now.AddSeconds(60)
+        $tray.Animation.Interval | Should Be 400
+        Update-AgentViewCriticalAnimation $tray $now.AddSeconds(59)
+        $s.Frame | Should Be 1
+        Update-AgentViewCriticalAnimation $tray $now.AddSeconds(60)
+        $tray.Animation.Running | Should Be $false; $s.Frame | Should Be 0
+        Complete-AgentViewRefresh $tray @($row) $now.AddSeconds(90)
+        $tray.Animation.Running | Should Be $false
+        $s.Manual=$true
+        Complete-AgentViewRefresh $tray @($row) $now.AddSeconds(100)
+        $s.CritUntil | Should Be $now.AddSeconds(160)
+        $s.Manual=$false
+        Complete-AgentViewRefresh $tray @((New-TestRow 10 0)) $now.AddSeconds(110)
+        Complete-AgentViewRefresh $tray @($row) $now.AddSeconds(120)
+        $s.CritUntil | Should Be $now.AddSeconds(180)
+    }
+}

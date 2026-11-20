@@ -116,6 +116,23 @@ Describe 'Ring WPF element' {
         Set-AgentRing -Ring $ring -State ok -Value $null -DurationMs 0
         $ring.Tag.State | Should Be 'error'
     }
+    It 'limits every repeating glow and spin timeline to twenty frames per second' {
+        function New-AnimationReceiver {
+            $receiver = @{Animations=@()}
+            $receiver | Add-Member ScriptMethod BeginAnimation { param($property,$animation) $this.Animations += $animation }
+            $receiver
+        }
+        $s = @{Style=(Get-AgentRingStyle ok 5); Suspended=$false; Glow=(New-AnimationReceiver); GlowScale=(New-AnimationReceiver); Rotate=(New-AnimationReceiver)}
+        Start-AgentRingLoops $s
+        $s.Style = Get-AgentRingStyle loading $null
+        Start-AgentRingLoops $s
+        $animations = @($s.Glow.Animations) + @($s.GlowScale.Animations) + @($s.Rotate.Animations)
+        $animations.Count | Should Be 4
+        foreach ($animation in $animations) {
+            [Windows.Media.Animation.Timeline]::GetDesiredFrameRate($animation) | Should Be 20
+            $animation.RepeatBehavior | Should Be ([Windows.Media.Animation.RepeatBehavior]::Forever)
+        }
+    }
     It 'runs the glow loop only for warn/crit and stops it when suspended' {
         $ring = New-AgentRing -Size 60 -Stroke 5 -Ticks
         Set-AgentRing -Ring $ring -State ok -Value 80 -DurationMs 0

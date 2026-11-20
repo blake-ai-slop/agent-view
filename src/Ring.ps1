@@ -213,13 +213,14 @@ function Start-AgentRingLoops($RingState) {
         $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($style.GlowHalfMs))
         $op = New-Object System.Windows.Media.Animation.DoubleAnimation 0.08, 0.34, $dur
         $sc = New-Object System.Windows.Media.Animation.DoubleAnimation 0.9, 1.04, $dur
-        foreach ($a in $op, $sc) { $a.AutoReverse = $true; $a.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever; $a.EasingFunction = $ease }
+        foreach ($a in $op, $sc) { [System.Windows.Media.Animation.Timeline]::SetDesiredFrameRate($a, 20); $a.AutoReverse = $true; $a.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever; $a.EasingFunction = $ease }
         $RingState.Glow.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $op)
         $RingState.GlowScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, $sc)
         $RingState.GlowScale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleYProperty, $sc)
     }
     if ($style.Spin) {
         $spin = New-AgentViewDoubleAnimation 0 360 1000 ''
+        [System.Windows.Media.Animation.Timeline]::SetDesiredFrameRate($spin, 20)
         $spin.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
         $RingState.Rotate.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $spin)
     }

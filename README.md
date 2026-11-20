@@ -148,7 +148,9 @@ Changing the language, widget, or start-at-sign-in setting restarts the app if i
 
 **Claude Code.** The app reads the usage that Claude Code already caches locally in `.claude.json` (or under `CLAUDE_CONFIG_DIR`). When that cache is older than 5 minutes, it runs the Claude CLI's `/usage` command in print mode, which makes no model turn, at most once every 5 minutes, so Claude Code refreshes its own cache; then it reads the cache again. Once a reset time has passed, that window is shown as full again. Cached data is used for up to 7 days.
 
-**Codex.** The app asks the local Codex CLI through its `app-server` rate-limit API.
+**Codex.** The app asks the local Codex CLI through its `app-server` rate-limit API, at most once every 5 minutes (refreshing from the tray menu or popup asks right away if the last query was at least 30 seconds ago). In between, it shows the last result; once a reset time has passed, that window is shown as full again.
+
+**Refresh.** The app refreshes on the interval you choose, less often while you are away (no input for 10 minutes), right after Claude Code updates its cache, and when a window resets.
 
 **What stays private.** The app does not read credential files, does not store account details, and does not send data anywhere. Only quota percentages and reset times are kept: for display, and as a local usage history for the forecast (no account data). The only network traffic is the provider CLIs talking to their own services.
 

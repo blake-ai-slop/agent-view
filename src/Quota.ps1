@@ -265,25 +265,30 @@ function Read-QuotaTextFile([string]$Path) {
   catch { return $null }
 }
 
-# AppDomain chia sẻ throttle giữa các runspace trong cùng phiên app.
-# Chỉ giữ thời điểm thử lại/lỗi chung, không giữ phản hồi hay dữ liệu tài khoản.
-function Get-ClaudeFallbackState {
+# AppDomain chia sẻ throttle giữa các runspace trong cùng phiên app (CLI `agentview status` là tiến trình riêng ⇒ state mới).
+function Get-QuotaDomainState([string]$Key) {
   $domain = [AppDomain]::CurrentDomain
   [Threading.Monitor]::Enter($domain)
   try {
-    $key = 'agent-view.ClaudeFallbackState'
-    $state = $domain.GetData($key)
+    $state = $domain.GetData($Key)
     if ($null -eq $state) {
       $state = [hashtable]::Synchronized(@{})
-      $domain.SetData($key, $state)
+      $domain.SetData($Key, $state)
     }
     return $state
   }
   finally { [Threading.Monitor]::Exit($domain) }
 }
 
-# Giữ tuổi cache và cửa sổ thiếu; không suy đoán giờ reset kế tiếp.
-function Reset-ClaudeCachedWindows([hashtable]$Cache, [datetime]$Now) {
+# Claude: chỉ giữ thời điểm thử lại/lỗi chung, không giữ phản hồi hay dữ liệu tài khoản.
+function Get-ClaudeFallbackState { Get-QuotaDomainState 'agent-view.ClaudeFallbackState' }
+
+# Codex: lần gọi app-server cuối + kết quả hợp lệ gần nhất (chỉ % + giờ reset + FetchedAt), không giữ phản hồi thô.
+function Get-CodexState { Get-QuotaDomainState 'agent-view.CodexState' }
+
+# Cửa sổ đã qua giờ reset ⇒ 0% đã dùng, reset null. Giữ tuổi dữ liệu và cửa sổ thiếu; không suy đoán giờ reset kế tiếp.
+# Dùng chung cho cache Claude và kết quả Codex gần nhất.
+function Reset-QuotaElapsedWindows([hashtable]$Cache, [datetime]$Now) {
   $data = $Cache.Clone()
   foreach ($window in @('FiveHour', 'Week')) {
     $reset = $window + 'ResetsAt'
@@ -298,6 +303,7 @@ function Reset-ClaudeCachedWindows([hashtable]$Cache, [datetime]$Now) {
 function New-QuotaOps {
   return @{
     FallbackState = Get-ClaudeFallbackState
+    CodexState    = Get-CodexState
     Now      = { Get-Date }
     GetEnv   = { param($name) [Environment]::GetEnvironmentVariable($name) }
     HomeDir  = { Get-QuotaHomeDir }
@@ -317,7 +323,7 @@ function Get-ClaudeQuota([hashtable]$Ops) {
     $path = Get-ClaudeConfigPath (& $Ops.GetEnv 'CLAUDE_CONFIG_DIR') (& $Ops.HomeDir)
     $cache = ConvertFrom-ClaudeConfigText (& $Ops.ReadText $path)
     if ($cache -and ($now - $cache.FetchedAt).TotalMinutes -le 5) {
-      $cache = Reset-ClaudeCachedWindows $cache $now
+      $cache = Reset-QuotaElapsedWindows $cache $now
       return New-AgentQuota 'claude' $name $cache $null $cache.FetchedAt
     }
     $err = (T 'quota.cannot_read_quota')
@@ -353,7 +359,7 @@ function Get-ClaudeQuota([hashtable]$Ops) {
     }
     $now = & $Ops.Now
     if ($cache -and ($now - $cache.FetchedAt).TotalDays -le 7) {
-      $cache = Reset-ClaudeCachedWindows $cache $now
+      $cache = Reset-QuotaElapsedWindows $cache $now
       return New-AgentQuota 'claude' $name $cache $null $cache.FetchedAt
     }
     return New-AgentQuota 'claude' $name $null $err $now
@@ -361,31 +367,67 @@ function Get-ClaudeQuota([hashtable]$Ops) {
   catch { return New-AgentQuota 'claude' $name $null (T 'quota.cannot_read_quota') (Get-Date) }
 }
 
-function Get-CodexQuota([hashtable]$Ops) {
+# app-server tốn ~2 s + 1 tiến trình: mọi lần gọi (thành công/lỗi/timeout) cách nhau ≥5 phút trong AppDomain, khóa theo
+# CLI + CODEX_HOME; đặt lịch trước khi chạy để runspace khác không gọi trùng. Giữa các lần gọi trả kết quả hợp lệ gần nhất
+# với FetchedAt thật (tối đa 7 ngày, áp dụng reset đã qua). -Manual (người dùng bấm refresh): gọi nếu lần trước ≥30 s.
+function Get-CodexQuota([hashtable]$Ops, [switch]$Manual) {
   $name = 'Codex'
   try {
     $now = & $Ops.Now
     $src = & $Ops.Find 'codex'
     if (-not $src) { return New-AgentQuota 'codex' $name $null (T 'quota.not_installed') $now }
-    $inv = Get-AgentCliInvocation $src @('app-server')
-    $r = & $Ops.Run $inv @(Get-CodexHello) { param($line) Get-CodexStep $line } 12000
-    $at = & $Ops.Now
-    $data = $null
-    if ($r) { $data = ConvertFrom-CodexReply $r.Lines }
-    if ($data) { return New-AgentQuota 'codex' $name $data $null $at }
-    if ($r -and $r.TimedOut) { return New-AgentQuota 'codex' $name $null (T 'quota.timed_out') $at }
-    return New-AgentQuota 'codex' $name $null (T 'quota.cannot_read_quota') $at
+    $key = "$src|$(& $Ops.GetEnv 'CODEX_HOME')"
+    $gap = [TimeSpan]::FromMinutes(5); if ($Manual) { $gap = [TimeSpan]::FromSeconds(30) }
+    $state = $Ops.CodexState
+    $attempt = $false
+    [Threading.Monitor]::Enter($state.SyncRoot)
+    try {
+      $last = $state[$key]
+      if ($last -and $now -lt $last.LastRun.Add($gap)) { $entry = $last }
+      else {
+        $good = $null; $err = (T 'quota.cannot_read_quota')
+        if ($last) { $good = $last.Good; $err = $last.Error }
+        $entry = @{ LastRun = $now; Good = $good; Error = $err }
+        $state[$key] = $entry
+        $attempt = $true
+      }
+    }
+    finally { [Threading.Monitor]::Exit($state.SyncRoot) }
+    if ($attempt) {
+      $r = $null; $data = $null
+      try {
+        $inv = Get-AgentCliInvocation $src @('app-server')
+        $r = & $Ops.Run $inv @(Get-CodexHello) { param($line) Get-CodexStep $line } 12000
+        if ($r) { $data = ConvertFrom-CodexReply $r.Lines }
+      } catch {}
+      $at = & $Ops.Now
+      $err = (T 'quota.cannot_read_quota')
+      if ($r -and $r.TimedOut -and -not $data) { $err = (T 'quota.timed_out') }
+      $good = $entry.Good
+      if ($data) { $good = $data.Clone(); $good.FetchedAt = $at; $err = $null }
+      $entry = @{ LastRun = $at; Good = $good; Error = $err }
+      $state[$key] = $entry
+      if ($data) { return New-AgentQuota 'codex' $name $data $null $at }
+    }
+    $now = & $Ops.Now
+    if ($entry.Good -and ($now - $entry.Good.FetchedAt).TotalDays -le 7) {
+      $good = Reset-QuotaElapsedWindows $entry.Good $now
+      return New-AgentQuota 'codex' $name $good $null $good.FetchedAt
+    }
+    $err = $entry.Error; if (-not $err) { $err = (T 'quota.cannot_read_quota') }
+    return New-AgentQuota 'codex' $name $null $err $now
   }
   catch { return New-AgentQuota 'codex' $name $null (T 'quota.cannot_read_quota') (Get-Date) }
 }
 
 # Quota của mọi provider, thứ tự cố định claude, codex: phát 2 object ra pipeline, không ném lỗi.
 # Ok khi có ít nhất một cửa sổ; số và reset của cửa sổ thiếu là $null. Tên trường luôn giữ nguyên.
-# -Ops: hashtable ghi đè một phần các thao tác ngoài (Now, GetEnv, HomeDir, ReadText, Find, Run).
+# -Ops: hashtable ghi đè một phần các thao tác ngoài (Now, GetEnv, HomeDir, ReadText, Find, Run, FallbackState, CodexState).
+# -Manual: người dùng bấm refresh/thử lại ⇒ chỉ nới throttle Codex (≥30 s); quy tắc 5 phút của Claude giữ nguyên.
 function Get-AgentQuotas {
-  param([hashtable]$Ops)
+  param([hashtable]$Ops, [switch]$Manual)
   $all = New-QuotaOps
   if ($Ops) { foreach ($k in @($Ops.Keys)) { $all[$k] = $Ops[$k] } }
   Get-ClaudeQuota $all
-  Get-CodexQuota $all
+  Get-CodexQuota $all -Manual:$Manual
 }
