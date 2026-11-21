@@ -46,10 +46,11 @@ function Get-AgentViewToastModel($Items, [switch]$Warning) {
     }
 }
 
-# Màu ô provider: claude/codex theo theme, provider lạ ⇒ accent.
+# Màu ô provider theo Family trong registry, provider lạ dùng accent.
 function Get-AgentViewToastProviderColor([string]$Provider, $Theme) {
     if (-not $Theme) { $Theme = Get-AgentViewTheme }
-    if (@('claude', 'codex') -contains $Provider) { return $Theme[$Provider] }
+    $family = Get-QuotaRowFamily @{ Provider = $Provider }
+    if ($Theme[$family] -and (Get-AgentProviders | Where-Object Family -CEQ $family)) { return $Theme[$family] }
     return $Theme['accent']
 }
 
@@ -245,6 +246,7 @@ function Set-AgentViewToastContent($Model) {
     $ui.Bar.Background = $(if ($Model.Warning) { ConvertTo-AgentViewBrush $theme['crit'] 0.7 } else { ConvertTo-AgentViewBrush $theme['av-text-3'] })
     Set-AgentViewToastBorder
     $i = 0
+    $logo = Get-Command Get-AgentViewLogo -ErrorAction SilentlyContinue
     foreach ($row in $Model.Rows) {
         $item = New-Object System.Windows.Controls.Border
         $item.Padding = New-Object System.Windows.Thickness 0, 6, 0, 6
@@ -263,6 +265,17 @@ function Set-AgentViewToastContent($Model) {
         $pv = New-Object System.Windows.Controls.Border
         $pv.Width = 6; $pv.Height = 6; $pv.CornerRadius = New-Object System.Windows.CornerRadius 2
         $pv.Background = ConvertTo-AgentViewBrush (Get-AgentViewToastProviderColor $row.Provider $theme)
+        $family = Get-QuotaRowFamily $row
+        if ($logo -and (Get-AgentProviders | Where-Object Family -CEQ $family)) {
+            $source = & $logo -Family $family -Size 12
+            if ($source) {
+                $image = New-Object System.Windows.Controls.Image
+                $image.Source = $source
+                $image.Width = 12; $image.Height = 12
+                $pv.Child = $image
+                $pv.Width = 16; $pv.Height = 16
+            }
+        }
         $pv.Margin = New-Object System.Windows.Thickness 0, 1, 6, 0; $pv.VerticalAlignment = 'Center'
         [void]$line.Children.Add($pv)
         $title = New-Object System.Windows.Controls.TextBlock

@@ -1,5 +1,7 @@
-﻿function Get-AgentViewTheme {
-    @{
+﻿if (-not (Test-Path function:Get-AgentProviders)) { . (Join-Path $PSScriptRoot 'Providers.ps1') }
+# Màu provider lấy từ registry, khóa theo Family ($Theme['claude'], $Theme['codex'], ...).
+function Get-AgentViewTheme {
+    $t = @{
         'av-bg' = '#12151C'
         'av-bg-top' = '#171B24'
         'av-surface' = '#1A1E28'
@@ -19,11 +21,11 @@
         'unk' = '#7D8597'
         'unk-hi' = '#AEB5C2'
         'accent' = '#8EA2FF'
-        'claude' = '#E2875C'
-        'codex' = '#C7CEDA'
         'err-bg' = '#2A171A'
         'err-stroke' = '#4A2328'
         'tray-disc' = '#0D1016'
         'tray-track' = '#2E3443'
     }
+    foreach ($p in Get-AgentProviders) { $t[$p.Family] = $p.Color }
+    $t
 }

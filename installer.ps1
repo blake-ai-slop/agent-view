@@ -1,6 +1,7 @@
 ﻿param(
     [string]$Source = $env:AGENT_VIEW_SOURCE,
-    [switch]$Yes, [switch]$NoAutostart, [switch]$Widget, [switch]$NoStart, [switch]$Quiet
+    [switch]$Yes, [switch]$NoAutostart, [switch]$Widget, [switch]$NoStart, [switch]$Quiet,
+    [string]$Providers
 )
 $__i18n = Join-Path $PSScriptRoot 'src/I18n.ps1'
 if (-not (Test-Path -LiteralPath $__i18n)) { $__i18n = Join-Path $PSScriptRoot 'I18n.ps1' }
@@ -62,6 +63,15 @@ Register-AgentViewStrings -Module 'installer' -Strings @{
         'error_at_step' = 'Error at step "'
         'no_changes_were_made_any_existing_installation_is_intact' = '    No changes were made; any existing installation is intact.'
         'try_again' = '    Try again: '
+        'choosing_providers' = 'choosing agents'
+        'agents_on_this_machine' = '  Agents on this machine:'
+        'provider_not_installed' = 'not installed'
+        'which_providers_to_show' = 'Which agents to show? (ids, comma-separated)'
+        'type_provider_ids_enter_default' = '    Type ids from the list separated by commas, Enter = default.'
+        'unknown_provider_ids' = 'Unknown agent id(s): {0}. Valid: {1}'
+        'no_supported_agent_detected' = 'No supported agent detected (Claude Code, Codex, Antigravity); agent-view will pick it up when you install one later.'
+        'providers_shown' = 'Agents shown: '
+        'providers_kept' = 'Agents: keeping your previous choice'
     }
     vi = @{
         'files' = ' file'
@@ -111,21 +121,31 @@ Register-AgentViewStrings -Module 'installer' -Strings @{
         'error_at_step' = 'Lỗi ở bước "'
         'no_changes_were_made_any_existing_installation_is_intact' = '    Chưa thay đổi gì trên máy; bản cũ (nếu có) vẫn giữ nguyên.'
         'try_again' = '    Thử lại: '
+        'choosing_providers' = 'chọn agent'
+        'agents_on_this_machine' = '  Agent trên máy:'
+        'provider_not_installed' = 'chưa cài'
+        'which_providers_to_show' = 'Hiển thị agent nào? (id, phân cách dấu phẩy)'
+        'type_provider_ids_enter_default' = '    Gõ id trong danh sách, phân cách dấu phẩy, Enter = mặc định.'
+        'unknown_provider_ids' = 'Id agent không hợp lệ: {0}. Hợp lệ: {1}'
+        'no_supported_agent_detected' = 'Chưa phát hiện agent nào được hỗ trợ (Claude Code, Codex, Antigravity); agent-view sẽ tự nhận khi bạn cài sau.'
+        'providers_shown' = 'Agent hiển thị: '
+        'providers_kept' = 'Agent: giữ lựa chọn cũ'
     }
 }
 # Bộ cài thật của agent-view: cài vào %LOCALAPPDATA%\agent-view. Thường được install.ps1 (bootstrap ASCII, chạy được qua
 # `irm <url>/install.ps1 | iex`) tải về thư mục tạm rồi chạy bằng powershell.exe -File; cũng chạy thẳng được bằng -File.
-# Tham số: cờ -Yes/-NoAutostart/-Widget/-NoStart/-Quiet hoặc biến môi trường AGENT_VIEW_YES/NO_AUTOSTART/WIDGET/NO_START/QUIET=1.
+# Tham số: cờ -Yes/-NoAutostart/-Widget/-NoStart/-Quiet hoặc biến môi trường AGENT_VIEW_YES/NO_AUTOSTART/WIDGET/NO_START/QUIET=1;
+# -Providers claude,codex hoặc AGENT_VIEW_PROVIDERS = danh sách agent hiển thị (bỏ trống ⇒ hỏi / lấy agent đã phát hiện).
 # Biến do bootstrap đặt: AGENT_VIEW_SOURCE (nguồn đã chọn), AGENT_VIEW_BOOTSTRAP=1, AGENT_VIEW_INSTALL_SCRIPT (đường dẫn install.ps1 nếu chạy file).
 # Tải hết vào thư mục tạm trước rồi mới thay bản cũ. File này có BOM (tiếng Việt cho PS 5.1) nên KHÔNG được iex trực tiếp.
-$script:AgentViewPayload = @('I18n.ps1','Ui.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Process.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','SettingsWindow.ps1','History.ps1','Forecast.ps1','Update.ps1','Notify.ps1','Toast.ps1','Version.ps1','Cli.ps1')
+$script:AgentViewPayload = @('I18n.ps1','Ui.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Providers.ps1','QuotaAntigravity.ps1','Process.ps1','Theme.ps1','Format.ps1','Logos.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','SettingsWindow.ps1','History.ps1','Forecast.ps1','Update.ps1','Notify.ps1','Toast.ps1','Version.ps1','Cli.ps1')
 $script:AgentViewDefaultInstallSource = 'https://raw.githubusercontent.com/blake-ai-slop/agent-view/main'
 $script:InstallQuiet = $false
 
 function Test-AgentViewTruthy([string]$Value) { return ([string]$Value -match '^(?i)(1|true|yes|y|on)$') }
 function Get-AgentViewInstallEnv {
     $h = @{}
-    foreach ($n in @('AGENT_VIEW_YES','AGENT_VIEW_NO_AUTOSTART','AGENT_VIEW_WIDGET','AGENT_VIEW_NO_START','AGENT_VIEW_QUIET')) { $h[$n] = [Environment]::GetEnvironmentVariable($n) }
+    foreach ($n in @('AGENT_VIEW_YES','AGENT_VIEW_NO_AUTOSTART','AGENT_VIEW_WIDGET','AGENT_VIEW_NO_START','AGENT_VIEW_QUIET','AGENT_VIEW_PROVIDERS')) { $h[$n] = [Environment]::GetEnvironmentVariable($n) }
     $h
 }
 # Quyết định lựa chọn cài. Có bất kỳ cờ/biến nào (-Yes, -NoAutostart, -Widget, -NoStart, -Quiet) hoặc không tương tác ⇒ không hỏi.
@@ -135,11 +155,12 @@ function Resolve-AgentViewInstallOptions([hashtable]$Flags, [hashtable]$EnvValue
     $pick = { param($flag, $envName) ([bool]$Flags[$flag]) -or (Test-AgentViewTruthy $EnvValues[$envName]) }
     $yes = & $pick 'Yes' 'AGENT_VIEW_YES'; $noAuto = & $pick 'NoAutostart' 'AGENT_VIEW_NO_AUTOSTART'
     $widget = & $pick 'Widget' 'AGENT_VIEW_WIDGET'; $noStart = & $pick 'NoStart' 'AGENT_VIEW_NO_START'; $quiet = & $pick 'Quiet' 'AGENT_VIEW_QUIET'
+    $prov = -not [string]::IsNullOrWhiteSpace([string]$Flags['Providers']) -or -not [string]::IsNullOrWhiteSpace([string]$EnvValues['AGENT_VIEW_PROVIDERS'])
     $autoDefault = $true
     if ($Existing -and $Existing.Installed) { $autoDefault = [bool]$Existing.Autostart }
     $widgetDefault = ($Existing -and [bool]$Existing.Widget)
     [pscustomobject]@{
-        Ask = ($Interactive -and -not ($yes -or $noAuto -or $widget -or $noStart -or $quiet))
+        Ask = ($Interactive -and -not ($yes -or $noAuto -or $widget -or $noStart -or $quiet -or $prov))
         Autostart = ($autoDefault -and -not $noAuto); Widget = ($widget -or $widgetDefault); Start = (-not $noStart); Quiet = $quiet
     }
 }
@@ -167,6 +188,51 @@ function Read-AgentViewYesNo([string]$Question, [bool]$Default) {
         Write-Host (T 'installer.type_y_yes_or_n_no_enter_default') -ForegroundColor DarkGray
     }
     return $Default
+}
+# Danh sách id agent ('claude, codex') ⇒ Family theo thứ tự registry. Trống ⇒ $Default; id lạ ⇒ Unknown.
+function ConvertFrom-AgentViewProviderAnswer([string]$Answer, [string[]]$Families, [string[]]$Default) {
+    $ids = @(([string]$Answer).Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    if ($ids.Count -eq 0) { return [pscustomobject]@{ Selected = @($Default); Unknown = @() } }
+    $unknown = @($ids | Where-Object { $Families -notcontains $_ } | Select-Object -Unique)
+    [pscustomobject]@{ Selected = @($Families | Where-Object { $ids -contains $_ }); Unknown = $unknown }
+}
+# Quyết định agent hiển thị. Thứ tự: -Providers/AGENT_VIEW_PROVIDERS (luôn áp dụng) > settings đã có KnownProviders (giữ, không
+# hỏi, không ghi) > hỏi (Ask; installer chỉ hỏi khi tương tác và không có cờ) > agent đã phát hiện.
+# Write ⇒ ghi HiddenProviders (Set-AgentViewProviderHidden) và KnownProviders = đã phát hiện.
+function Resolve-AgentViewProviderChoice([string]$Explicit, $Existing, [string[]]$Detected, [string[]]$Families) {
+    $known = @(@($Existing.KnownProviders) | Where-Object { $_ })
+    # Mặc định = đã phát hiện, trừ Family người dùng đã ẩn ở bản cũ (cập nhật từ bản chưa có KnownProviders không mất lựa chọn).
+    $default = @($Detected | Where-Object { @($Existing.HiddenProviders) -notcontains $_ })
+    if ($default.Count -eq 0) { $default = @($Detected) }
+    $r = [pscustomobject]@{ Ask = $false; Keep = $false; Write = $true; Selected = $default; Hidden = @(); Known = @($Detected); Unknown = @() }
+    if (-not [string]::IsNullOrWhiteSpace($Explicit)) {
+        $a = ConvertFrom-AgentViewProviderAnswer $Explicit $Families $Detected
+        $r.Selected = @($a.Selected); $r.Unknown = @($a.Unknown)
+    } elseif ($known.Count -gt 0) {
+        $r.Keep = $true; $r.Write = $false
+    } else { $r.Ask = $true }
+    return $r
+}
+# Hidden = Family không chọn + id nhóm đã ẩn của Family được chọn. Không chọn được gì ⇒ không ẩn Family nào (không bao giờ ẩn hết).
+function Set-AgentViewProviderHidden($Choice, $Existing, [string[]]$Families) {
+    $selected = @($Choice.Selected)
+    if ($selected.Count -eq 0) { $Choice.Hidden = @(); return $Choice }
+    $groups = @(@($Existing.HiddenProviders) | Where-Object { "$_" -like '*-*' -and $selected -contains ("$_" -split '-')[0] })
+    $Choice.Hidden = @(@($Families | Where-Object { $selected -notcontains $_ }) + $groups)
+    return $Choice
+}
+function Read-AgentViewProviders($Providers, [string[]]$Default) {
+    $families = @($Providers | ForEach-Object { $_.Family })
+    $hint = '[' + ($Default -join ',') + ']'
+    for ($i = 0; $i -lt 3; $i++) {
+        Write-Host ('  ? ' + (T 'installer.which_providers_to_show') + ' ' + $hint + ' ') -ForegroundColor Cyan -NoNewline
+        $line = [Console]::ReadLine()
+        if ($null -eq $line) { return @($Default) }
+        $a = ConvertFrom-AgentViewProviderAnswer $line $families $Default
+        if ($a.Unknown.Count -eq 0) { return @($a.Selected) }
+        Write-Host (T 'installer.type_provider_ids_enter_default') -ForegroundColor DarkGray
+    }
+    return @($Default)
 }
 function Write-InstallStep([string]$Kind, [string]$Text, [string]$Detail) {
     if ($script:InstallQuiet -and $Kind -ne 'fail') { return }
@@ -294,7 +360,28 @@ function Invoke-AgentViewInstall([string]$Source, [hashtable]$Flags, [string]$Sc
 
         $step = (T 'installer.reading_existing_preferences')
         $existing = [pscustomobject]@{ Installed=(Test-Path -LiteralPath $paths.Entry); Autostart=(Test-AgentViewAutostart $paths); Widget=[bool](Get-AgentViewSettings $paths.Settings).WidgetEnabled }
+        $currentSettings = Get-AgentViewSettings $paths.Settings
         $opt = Resolve-AgentViewInstallOptions $Flags $envValues (Test-AgentViewInteractive) $existing
+
+        $step = (T 'installer.choosing_providers')
+        . (Join-Path $staging 'Quota.ps1')
+        $registry = @(Get-AgentProviders)
+        $families = @($registry | ForEach-Object { $_.Family })
+        $detected = @(Get-AgentDetectedProviders -Rescan)
+        $explicit = [string]$Flags['Providers']; if ([string]::IsNullOrWhiteSpace($explicit)) { $explicit = [string]$envValues['AGENT_VIEW_PROVIDERS'] }
+        $choice = Resolve-AgentViewProviderChoice $explicit $currentSettings $detected $families
+        if ($choice.Unknown.Count -gt 0) { throw (T 'installer.unknown_provider_ids' -Args @(($choice.Unknown -join ', '), ($families -join ', '))) }
+        if (-not $choice.Keep) {
+            Write-InstallLine ''
+            Write-InstallLine (T 'installer.agents_on_this_machine')
+            foreach ($p in $registry) {
+                if ($detected -contains $p.Family) { Write-InstallLine ('    ✓ ' + $p.Name + ' (' + $p.Family + ')') 'Green' }
+                else { Write-InstallLine ('    ✗ ' + $p.Name + ' (' + $p.Family + ') — ' + (T 'installer.provider_not_installed')) 'DarkGray' }
+            }
+            if ($detected.Count -eq 0 -and -not $script:InstallQuiet) { Write-Host ('  ! ' + (T 'installer.no_supported_agent_detected')) -ForegroundColor Yellow }
+            if ($choice.Ask -and $opt.Ask) { $choice.Selected = @(Read-AgentViewProviders $registry @($choice.Selected)) }
+        }
+        $choice = Set-AgentViewProviderHidden $choice $currentSettings $families
         if ($opt.Ask) {
             Write-InstallLine ''
             $opt.Autostart = Read-AgentViewYesNo (T 'installer.start_automatically_at_windows_sign_in') $opt.Autostart
@@ -325,8 +412,13 @@ function Invoke-AgentViewInstall([string]$Source, [hashtable]$Flags, [string]$Sc
 
         $step = (T 'installer.saving_widget_preferences')
         $settings = Get-AgentViewSettings $paths.Settings
-        if ([bool]$settings.WidgetEnabled -ne [bool]$opt.Widget -or -not (Test-Path -LiteralPath $paths.Settings)) { $settings.WidgetEnabled = [bool]$opt.Widget; Save-AgentViewSettings $settings $paths.Settings }
+        $dirty = ([bool]$settings.WidgetEnabled -ne [bool]$opt.Widget -or -not (Test-Path -LiteralPath $paths.Settings))
+        $settings.WidgetEnabled = [bool]$opt.Widget
+        if ($choice.Write) { $settings.HiddenProviders = [string[]]@($choice.Hidden); $settings.KnownProviders = [string[]]@($choice.Known); $dirty = $true }
+        if ($dirty) { Save-AgentViewSettings $settings $paths.Settings }
         Write-InstallStep $(if ($opt.Widget) { 'ok' } else { 'skip' }) ((T 'installer.floating_widget') + $(if ($opt.Widget) { (T 'installer.on') } else { (T 'installer.off') }))
+        if ($choice.Keep) { Write-InstallStep skip (T 'installer.providers_kept') }
+        elseif (@($choice.Selected).Count -gt 0) { Write-InstallStep ok ((T 'installer.providers_shown') + (@($registry | Where-Object { @($choice.Selected) -contains $_.Family } | ForEach-Object { $_.Name }) -join ', ')) }
 
         $started = $false
         if ($opt.Start) {
@@ -358,6 +450,6 @@ function Invoke-AgentViewInstall([string]$Source, [hashtable]$Flags, [string]$Sc
 if ($MyInvocation.InvocationName -eq '.') { return }
 $__scriptPath = $PSCommandPath
 if ($env:AGENT_VIEW_BOOTSTRAP -eq '1') { $__scriptPath = $env:AGENT_VIEW_INSTALL_SCRIPT }  # chạy qua install.ps1: thử lại bằng chính lệnh người dùng đã gõ
-$__code = Invoke-AgentViewInstall -Source $Source -ScriptRoot $PSScriptRoot -ScriptPath $__scriptPath -Flags @{ Yes=[bool]$Yes; NoAutostart=[bool]$NoAutostart; Widget=[bool]$Widget; NoStart=[bool]$NoStart; Quiet=[bool]$Quiet }
+$__code = Invoke-AgentViewInstall -Source $Source -ScriptRoot $PSScriptRoot -ScriptPath $__scriptPath -Flags @{ Yes=[bool]$Yes; NoAutostart=[bool]$NoAutostart; Widget=[bool]$Widget; NoStart=[bool]$NoStart; Quiet=[bool]$Quiet; Providers=$Providers }
 if ($PSCommandPath) { exit $__code }
 $global:LASTEXITCODE = $__code

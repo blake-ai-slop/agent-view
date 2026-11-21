@@ -112,3 +112,63 @@ Describe 'Optional widget window detail' {
         }
     }
 }
+
+Describe 'Widget per family (v0.3.0)' {
+    $savedPresence = [AppDomain]::CurrentDomain.GetData('agent-view.ProviderPresence')
+    function Set-WPresence($Families) {
+        $state = [hashtable]::Synchronized(@{})
+        if ($null -ne $Families) { $state['Families'] = [string[]]@($Families) }
+        [AppDomain]::CurrentDomain.SetData('agent-view.ProviderPresence', $state)
+    }
+    function New-WAg([string]$Group, $Five, $Week) {
+        $r = [pscustomobject]@{ Provider = "antigravity-$($Group.ToLowerInvariant())"; Name = "Antigravity · $Group"; Ok = $true; FiveHourUsed = $Five; WeekUsed = $Week; FiveHourResetsAt = $null; WeekResetsAt = $null }
+        $r | Add-Member -NotePropertyMembers @{ Family = 'antigravity'; Group = $Group }
+        $r
+    }
+    AfterEach {
+        Hide-AgentViewWidget
+        [AppDomain]::CurrentDomain.SetData('agent-view.ProviderPresence', $savedPresence)
+        [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Windows.Threading.DispatcherPriority]::ContextIdle, [Action]{})
+    }
+    It 'takes the tightest group for the family ring and lists every group' {
+        $g = [pscustomobject]@{ Family = 'antigravity'; Rows = @((New-WAg 'Gemini' 8 3), (New-WAg 'Argon' $null 92), (New-WAg 'Claude/GPT' 0 0)) }
+        $m = Get-AgentViewWidgetFamilyModel $g
+        $m.Name | Should Be 'Antigravity'
+        $m.State | Should Be 'ok'; $m.Value | Should Be 8; $m.Level | Should Be 'crit'; $m.Label | Should Be '8%'
+        @($m.Lines).Count | Should Be 3
+        $m.Lines[0] | Should Be 'Gemini · 5h 92% · Tuần 97%'
+        $m.Lines[1] | Should Be 'Argon · Tuần 8%'
+        (Get-AgentViewWidgetFamilyModel $g -Loading).Label | Should Be '…'
+        $single = Get-AgentViewWidgetFamilyModel ([pscustomobject]@{ Family = 'antigravity'; Rows = @((New-WAg 'Gemini' 8 3)) })
+        $single.Name | Should Be 'Antigravity · Gemini'
+        $single.Lines[0] | Should Be '5h 92% · Tuần 97%'
+        $bad = [pscustomobject]@{ Provider = 'codex'; Name = 'Codex'; Ok = $false; Error = 'Chưa đăng nhập'; FiveHourUsed = $null; WeekUsed = $null }
+        $e = Get-AgentViewWidgetFamilyModel ([pscustomobject]@{ Family = 'codex'; Rows = @($bad) })
+        $e.State | Should Be 'error'; $e.Label | Should Be '?'; $e.Lines[0] | Should Be 'Chưa đăng nhập'
+    }
+    It 'shows one 40px ring per family with official logos' {
+        Set-WPresence @('claude','antigravity')
+        $rows = @([pscustomobject]@{ Provider = 'claude'; Name = 'Claude Code'; Ok = $true; FiveHourUsed = 30; WeekUsed = 10 }, (New-WAg 'Gemini' 8 3), (New-WAg 'Argon' $null 50))
+        Show-AgentViewWidget -Rows $rows
+        $s = Get-AgentViewWidgetState
+        $s.Cards.Count | Should Be 2
+        ($s.Cards | ForEach-Object { $_.Family }) -join ',' | Should Be 'claude,antigravity'
+        $s.Cards[1].Label.Foreground.Color.ToString() | Should Be '#FF3DD68C'   # số % tween từ 0; màu theo mức nhóm sát nhất (50% ⇒ ok)
+        $s.Cards[1].Name.Text | Should Be 'Antigravity'
+        $s.Cards[1].LineCount | Should Be 2
+        ($s.Cards[1].Ring.Tag.Icon -is [System.Windows.Controls.Image]) | Should Be $true
+        $s.Cards[0].Ring.Width | Should Be 40
+        Update-AgentViewWidget -Rows @($rows[0])
+        $s.Cards.Count | Should Be 1
+    }
+    It 'shows a gray no-agent ring when nothing is detected' {
+        Set-WPresence @()
+        Show-AgentViewWidget -Rows @()
+        $s = Get-AgentViewWidgetState
+        $s.Cards.Count | Should Be 1
+        $s.Cards[0].Label.Text | Should Be '–'
+        $s.Cards[0].Line.Text | Should Be 'Chưa có agent'
+        $s.Cards[0].Ring.Tag.State | Should Be 'error'
+        $s.Cards[0].Ring.Tag.Icon | Should Be $null
+    }
+}

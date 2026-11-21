@@ -2,8 +2,8 @@
 # `irm .../install.ps1 | iex` hands the text to iex, and a BOM (U+FEFF) breaks a param() block there.
 # It fetches installer.ps1 (the real installer, UTF-8 with BOM) into a private temp folder and runs it
 # in Windows PowerShell 5.1 with -File, forwarding options and AGENT_VIEW_* environment variables.
-# Options: -Yes -NoAutostart -Widget -NoStart -Quiet -Source <url-or-folder>
-# (or AGENT_VIEW_YES / _NO_AUTOSTART / _WIDGET / _NO_START / _QUIET = 1, AGENT_VIEW_SOURCE).
+# Options: -Yes -NoAutostart -Widget -NoStart -Quiet -Source <url-or-folder> -Providers <id,id>
+# (or AGENT_VIEW_YES / _NO_AUTOSTART / _WIDGET / _NO_START / _QUIET = 1, AGENT_VIEW_SOURCE, AGENT_VIEW_PROVIDERS).
 $__avCode = & {
     param([object[]]$Argv, [string]$SelfPath)
     $defaultSource = 'https://raw.githubusercontent.com/blake-ai-slop/agent-view/main'
@@ -18,9 +18,15 @@ $__avCode = & {
             if ($i + 1 -ge $argList.Count) { Write-Host '  x agent-view: -Source needs a URL or folder.' -ForegroundColor Red; return 2 }
             $i++; $source = [string]$argList[$i]; continue
         }
+        if ($a -match '^-' -and $name -ieq 'Providers') {
+            if ($i + 1 -ge $argList.Count) { Write-Host '  x agent-view: -Providers needs a comma-separated list (e.g. claude,codex).' -ForegroundColor Red; return 2 }
+            $i++; $list = (@($argList[$i]) | ForEach-Object { [string]$_ }) -join ','
+            if ($list -notmatch '^[A-Za-z0-9, -]*$') { Write-Host ('  x agent-view: invalid -Providers value "' + $list + '".') -ForegroundColor Red; return 2 }
+            $forward.Add('-Providers'); $forward.Add('"' + $list + '"'); continue
+        }
         $known = @($flagNames | Where-Object { $a -match '^-' -and $_ -ieq $name })
         if ($known.Count) { $forward.Add('-' + $known[0]); continue }
-        Write-Host ('  x agent-view: unknown option "' + $a + '". Use -Yes -NoAutostart -Widget -NoStart -Quiet -Source <url-or-folder>.') -ForegroundColor Red
+        Write-Host ('  x agent-view: unknown option "' + $a + '". Use -Yes -NoAutostart -Widget -NoStart -Quiet -Source <url-or-folder> -Providers <id,id>.') -ForegroundColor Red
         return 2
     }
     if ([string]::IsNullOrWhiteSpace($source)) {

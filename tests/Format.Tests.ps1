@@ -31,12 +31,51 @@ Describe 'Shared quota formatting' {
     }
 }
 
+Describe 'Shared provider hide rule' {
+    function New-HRow([string]$Provider, [string]$Family) {
+        $r = [pscustomobject]@{ Provider = $Provider; Name = $Provider; Ok = $true; FiveHourUsed = 10; WeekUsed = 10 }
+        if ($Family) { $r | Add-Member -NotePropertyName Family -NotePropertyValue $Family }
+        $r
+    }
+    $rows = @((New-HRow 'claude'), (New-HRow 'codex'), (New-HRow 'antigravity-gemini' 'antigravity'), (New-HRow 'antigravity-3p' 'antigravity'), (New-HRow 'antigravity-argon' 'antigravity'))
+    It 'matches a hidden id by Provider or by Family' {
+        Get-QuotaRowFamily $rows[2] | Should Be 'antigravity'
+        Get-QuotaRowFamily ([pscustomobject]@{ Provider = 'antigravity-x' }) | Should Be 'antigravity'
+        Test-QuotaRowHidden $rows[2] @('antigravity') | Should Be $true
+        Test-QuotaRowHidden $rows[2] @('antigravity-argon') | Should Be $false
+        Test-QuotaRowHidden $rows[4] @('antigravity-argon') | Should Be $true
+        Test-QuotaRowHidden $rows[0] @() | Should Be $false
+        Test-QuotaRowHidden $rows[0] $null | Should Be $false
+    }
+    It 'hides a whole family or a single group and keeps order' {
+        @(Select-QuotaShownRows $rows @('antigravity') | ForEach-Object Provider) -join ',' | Should Be 'claude,codex'
+        @(Select-QuotaShownRows $rows @('antigravity-argon','codex') | ForEach-Object Provider) -join ',' | Should Be 'claude,antigravity-gemini,antigravity-3p'
+        @(Select-QuotaShownRows (,@($rows)) @()).Count | Should Be 5
+    }
+    It 'falls back to every row when everything would be hidden' {
+        $two = @($rows[0], $rows[1])
+        @(Select-QuotaShownRows $two @('claude','codex') | ForEach-Object Provider) -join ',' | Should Be 'claude,codex'
+        @(Select-QuotaShownRows @() @('claude')).Count | Should Be 0
+    }
+    It 'skips fetching hidden families unless every detected family is hidden' {
+        @(Get-QuotaSkipFamilies @('antigravity','codex-x') @('claude','codex','antigravity')) -join ',' | Should Be 'antigravity'
+        @(Get-QuotaSkipFamilies @('antigravity-argon') @('claude','antigravity')).Count | Should Be 0
+        @(Get-QuotaSkipFamilies @('claude','codex') @('claude','codex')).Count | Should Be 0
+        @(Get-QuotaSkipFamilies @('claude','codex') @('claude','codex','antigravity')) -join ',' | Should Be 'claude,codex'
+        @(Get-QuotaSkipFamilies @('claude') @()).Count | Should Be 0
+    }
+}
+
 . "$PSScriptRoot/../src/Tray.ps1"
 Describe 'Shared row boundary through real popup widget and tray' {
     It 'preserves count order and display values for eight input shapes' {
         $first=[pscustomobject]@{Provider='claude';Name='Claude Code';Ok=$true;FiveHourUsed=24;WeekUsed=12}
         $second=[pscustomobject]@{Provider='codex';Name='Codex';Ok=$true;FiveHourUsed=75;WeekUsed=40}
         $worker=[PowerShell]::Create()
+        # Rỗng ⇒ thẻ "chưa có dữ liệu" theo Family phát hiện được: giả lập đã phát hiện claude+codex.
+        $savedPresence=[AppDomain]::CurrentDomain.GetData('agent-view.ProviderPresence')
+        $presence=[hashtable]::Synchronized(@{}); $presence['Families']=[string[]]@('claude','codex')
+        [AppDomain]::CurrentDomain.SetData('agent-view.ProviderPresence',$presence)
         try {
             $collection=$worker.AddScript({param($a,$b) ,@($a,$b)}).AddArgument($first).AddArgument($second).Invoke()
             $cases=@(
@@ -74,7 +113,7 @@ Describe 'Shared row boundary through real popup widget and tray' {
                     for($i=0;$i -lt $rows.Count;$i++) {
                         $state.Order[$i] | Should Be $rows[$i].Provider
                         $value=[string](Get-QuotaRemaining $rows[$i])
-                        $state.Cards[$rows[$i].Provider].BigNum.Text | Should Be $value
+                        $state.Cards[$rows[$i].Provider].MiniFiveValue.Text | Should Be ([string](100-[int]$rows[$i].FiveHourUsed)+'%')
                         $widget.Cards[$i].Line.Text | Should Be (Get-AgentViewWidgetDetailText (Get-AgentViewCardModel $rows[$i]))
                     }
                 } finally {
@@ -84,14 +123,14 @@ Describe 'Shared row boundary through real popup widget and tray' {
                     [AppDomain]::CurrentDomain.SetData('agent-view.popup',$null)
                 }
             }
-        } finally { $worker.Dispose() }
+        } finally { $worker.Dispose(); [AppDomain]::CurrentDomain.SetData('agent-view.ProviderPresence',$savedPresence) }
     }
     It 'accepts actual quota output from a background runspace' {
         $worker=[PowerShell]::Create()
         try {
             [void]$worker.AddScript({param($path)
                 . $path
-                Get-AgentQuotas -Ops @{ReadText={param($p)$null};Find={param($n)$null};Run={throw 'CLI must not run'}}
+                Get-AgentQuotas -Ops @{ReadText={param($p)$null};Find={param($n)$null};Run={throw 'CLI must not run'};ProviderPresence=@{Families=[string[]]@('claude','codex')}}
             }).AddArgument((Join-Path $PSScriptRoot '../src/Quota.ps1'))
             $pending=$worker.BeginInvoke()
             $rows=@(ConvertTo-QuotaRows ($worker.EndInvoke($pending)))

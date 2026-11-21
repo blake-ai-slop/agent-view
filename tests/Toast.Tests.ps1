@@ -42,6 +42,7 @@ Describe 'Toast pure helpers' {
         $rows[2].Level | Should Be 'ok'; $rows[2].Value | Should Be 100; $rows[2].Center | Should Be ([string][char]0x2713)
         $rows[3].Level | Should Be 'ok'
         Get-AgentViewToastProviderColor 'claude' | Should Be (Get-AgentViewTheme)['claude']
+        Get-AgentViewToastProviderColor 'antigravity-gemini' | Should Be (Get-AgentViewTheme)['antigravity']
         Get-AgentViewToastProviderColor 'other' | Should Be (Get-AgentViewTheme)['accent']
     }
     It 'treats a failed busy query as not busy' {
@@ -81,6 +82,32 @@ Describe 'Toast window' {
             Reset-ToastState
         }
         [AppDomain]::CurrentDomain.SetData('agent-view.language', $savedLanguage)
+    }
+    It 'uses the Family logo and color for group notices and provider additions' {
+        function Get-AgentViewLogo([string]$Family, [int]$Size) {
+            if ($Family -eq 'antigravity' -and $Size -eq 12) {
+                $logo=New-Object Windows.Media.DrawingImage
+                $logo.Freeze()
+                return $logo
+            }
+        }
+        Set-AgentViewLanguage vi
+        $added=T 'tray.provider_added' -Args @('Antigravity')
+        Show-AgentViewToast -Items @(
+            (New-ToastItem 'antigravity-gemini'),
+            (New-ToastItem 'antigravity' -Kind update -Title $added),
+            (New-ToastItem 'claude')
+        )
+        $rows=(Get-AgentViewToastState).Ui.Rows.Children
+        foreach ($index in 0,1) {
+            $badge=$rows[$index].Child.Children[1].Children[0].Children[0]
+            $badge.Background.Color.ToString().Substring(3) | Should Be (Get-AgentViewTheme)['antigravity'].Substring(1)
+            $badge.Child.Source.IsFrozen | Should Be $true
+        }
+        $rows[1].Child.Children[1].Children[0].Children[1].Text | Should Be 'Đã thêm Antigravity'
+        $fallback=$rows[2].Child.Children[1].Children[0].Children[0]
+        $fallback.Child | Should Be $null
+        $fallback.Width | Should Be 6
     }
     It 'shows +N for more than four items' {
         Set-AgentViewLanguage en

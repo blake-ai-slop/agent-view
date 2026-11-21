@@ -3,6 +3,7 @@
 # Hợp đồng: New-AgentRing / Set-AgentRing; Suspend-/Resume-AgentRing để tắt vòng lặp khi ẩn.
 if (-not (Test-Path function:Initialize-AgentViewWpf)) { . (Join-Path $PSScriptRoot 'Ui.ps1') }
 if (-not (Test-Path function:Get-QuotaLevel)) { . (Join-Path $PSScriptRoot 'Format.ps1') }
+if (-not (Test-Path function:Get-AgentViewLogo)) { . (Join-Path $PSScriptRoot 'Logos.ps1') }
 
 # ---------------------------------------------------------------- hàm thuần (test không cần WPF)
 function Get-AgentRingRadius([double]$Size, [double]$Stroke, [switch]$Ticks) {
@@ -69,8 +70,19 @@ function Get-AgentRingStyle([string]$State, $Value, $Theme) {
 
 # ---------------------------------------------------------------- dựng WPF
 
-# Biểu tượng tự vẽ (placeholder theo thiết kế SVG, không phải logo chính thức), hệ toạ độ 24×24.
+# Biểu tượng giữa vòng theo Family (hệ toạ độ IconSize): logo chính thức (Logos.ps1 · Get-AgentViewLogo) nếu có;
+# không có logo ⇒ hình tự vẽ cũ (claude/codex); Family khác có trong registry ⇒ vòng chữ cái đầu màu registry; còn lại $null.
 function New-AgentRingIcon([string]$Icon, [double]$IconSize, $Theme) {
+    if (-not $Icon) { return $null }
+    $logo = $null
+    if (Test-Path function:Get-AgentViewLogo) { try { $logo = Get-AgentViewLogo $Icon ([int][math]::Ceiling($IconSize)) } catch { $logo = $null } }
+    if ($logo) {
+        $img = New-Object System.Windows.Controls.Image
+        $img.Source = $logo; $img.Width = $IconSize; $img.Height = $IconSize; $img.Stretch = 'Uniform'
+        $img.HorizontalAlignment = 'Center'; $img.VerticalAlignment = 'Center'; $img.IsHitTestVisible = $false
+        [System.Windows.Media.RenderOptions]::SetBitmapScalingMode($img, [System.Windows.Media.BitmapScalingMode]::HighQuality)
+        return $img
+    }
     $canvas = New-Object System.Windows.Controls.Canvas
     $canvas.Width = 24; $canvas.Height = 24
     $round = [System.Windows.Media.PenLineCap]::Round
@@ -93,7 +105,19 @@ function New-AgentRingIcon([string]$Icon, [double]$IconSize, $Theme) {
         $prompt.Stroke = $brush; $prompt.StrokeThickness = 1.9
         $prompt.StrokeStartLineCap = $round; $prompt.StrokeEndLineCap = $round; $prompt.StrokeLineJoin = [System.Windows.Media.PenLineJoin]::Round
         [void]$canvas.Children.Add($frame); [void]$canvas.Children.Add($prompt)
-    } else { return $null }
+    } else {
+        $p = @(Get-AgentProviders | Where-Object { $_.Family -eq $Icon }) | Select-Object -First 1
+        if (-not $p) { return $null }
+        $brush = ConvertTo-AgentViewBrush $p.Color
+        $circle = New-Object System.Windows.Shapes.Ellipse
+        $circle.Width = 20; $circle.Height = 20; $circle.Stroke = $brush; $circle.StrokeThickness = 1.9
+        [System.Windows.Controls.Canvas]::SetLeft($circle, 2); [System.Windows.Controls.Canvas]::SetTop($circle, 2)
+        $letter = New-Object System.Windows.Controls.TextBlock
+        $letter.Text = ([string]$p.Short).Substring(0, 1).ToUpperInvariant(); $letter.Foreground = $brush
+        $letter.FontSize = 12; $letter.FontWeight = 'SemiBold'; $letter.Width = 24; $letter.TextAlignment = 'Center'
+        [System.Windows.Controls.Canvas]::SetTop($letter, 4.5)
+        [void]$canvas.Children.Add($circle); [void]$canvas.Children.Add($letter)
+    }
     $box = New-Object System.Windows.Controls.Viewbox
     $box.Width = $IconSize; $box.Height = $IconSize; $box.Child = $canvas
     $box.HorizontalAlignment = 'Center'; $box.VerticalAlignment = 'Center'
@@ -226,11 +250,18 @@ function Start-AgentRingLoops($RingState) {
     }
 }
 
-# Dừng mọi hoạt ảnh lặp (khi cửa sổ chứa vòng ẩn) để idle CPU ~0.
+# Dừng mọi hoạt ảnh lặp (khi cửa sổ chứa vòng ẩn/thẻ bị bỏ) để idle CPU ~0. Tween số đang chạy ⇒ nhảy tới giá trị đích
+# và dừng timer (timer còn chạy sau khi scope định nghĩa hàm đã mất có thể ném khi Dispatcher được drain).
 function Suspend-AgentRing($Ring) {
     $s = $Ring.Tag
     $s.Suspended = $true
     Stop-AgentRingLoops $s
+    if ($s.Timer) {
+        $t = $s.Timer.Tag
+        $s.Timer.Stop(); $s.Timer = $null
+        $s.Value = $t.B; Update-AgentRingArc $s $t.B
+        if ($t.OnTick) { try { & $t.OnTick $t.B } catch { } }
+    }
 }
 function Resume-AgentRing($Ring) {
     $s = $Ring.Tag

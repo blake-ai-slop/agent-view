@@ -80,3 +80,34 @@ function Get-QuotaTightestWindow($Row) {
     if ($Row.FiveHourUsed -ge $Row.WeekUsed) { return (T 'format.5_hours') }
     return (T 'format.week')
 }
+# ---------- quy tắc ẩn provider (MỘT bản duy nhất cho Tray/Notify/CLI) ----------
+# Family của row: trường Family nếu có, không thì phần trước '-' của Provider (row cũ/row lỗi chưa gắn Family).
+function Get-QuotaRowFamily($Row) {
+    if ($null -eq $Row) { return $null }
+    $family = $Row.Family
+    if ($family) { return [string]$family }
+    return (([string]$Row.Provider) -split '-')[0]
+}
+# id ẩn khớp row nếu bằng Provider (vd. antigravity-argon) hoặc bằng Family của row (antigravity ⇒ mọi antigravity-*).
+function Test-QuotaRowHidden($Row, $Hidden) {
+    $ids = @(@($Hidden) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+    if ($ids.Count -eq 0 -or $null -eq $Row) { return $false }
+    return (($ids -ccontains [string]$Row.Provider) -or ($ids -ccontains (Get-QuotaRowFamily $Row)))
+}
+# Bỏ row bị ẩn; lọc xong không còn row nào trong khi trước lọc có ⇒ trả lại toàn bộ (không bao giờ ẩn hết,
+# vd. settings cũ ẩn claude+codex trên máy chỉ có hai provider đó). Phát từng row; caller bọc @().
+function Select-QuotaShownRows($Rows, $Hidden) {
+    $all = @(ConvertTo-QuotaRows $Rows)
+    $kept = @(foreach ($row in $all) { if (-not (Test-QuotaRowHidden $row $Hidden)) { $row } })
+    if ($kept.Count -eq 0 -and $all.Count -gt 0) { $kept = $all }
+    foreach ($row in $kept) { $row }
+}
+# Family không cần fetch: id ẩn trùng nguyên một Family đã phát hiện. Mọi Family phát hiện được đều bị ẩn ⇒ không bỏ gì
+# (cùng fallback với Select-QuotaShownRows). Trả [string[]].
+function Get-QuotaSkipFamilies($Hidden, $Detected) {
+    $ids = @(@($Hidden) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+    $found = @(@($Detected) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+    $skip = @($found | Where-Object { $ids -ccontains $_ })
+    if ($skip.Count -ge $found.Count) { return [string[]]@() }
+    return [string[]]$skip
+}

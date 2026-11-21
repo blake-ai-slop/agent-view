@@ -129,3 +129,84 @@ Describe 'status output' {
         @($o.quotas[0].PSObject.Properties.Name) -join ',' | Should Be 'provider,name,ok,error,remaining,level,fiveHourRemaining,weekRemaining,fiveHourResetsAt,weekResetsAt,fetchedAt'
     }
 }
+
+Describe 'providers command' {
+    . "$PSScriptRoot/../src/Quota.ps1"   # có sẵn ⇒ Invoke-AgentViewProviders không nạp lại, Mock phát hiện có hiệu lực
+    BeforeEach { Set-AgentViewLanguage vi }
+    $families = @('claude','codex','antigravity')
+    It 'is a known command and listed in help' {
+        $c = Resolve-AgentViewCommand @('providers','hide','codex')
+        $c.Command | Should Be 'providers'; ($c.Rest -join ' ') | Should Be 'hide codex'
+        (Resolve-AgentViewCommand @('provders')).Suggestion | Should Be 'providers'
+    }
+    It 'hides and shows families and groups without ever hiding every agent' {
+        $r = Get-AgentViewProviderChange 'hide' 'antigravity' @() @('claude','antigravity') $families
+        $r.Changed | Should Be $true; ($r.Hidden -join ',') | Should Be 'antigravity'
+        $r = Get-AgentViewProviderChange 'hide' 'antigravity-argon' @('codex') @('claude','antigravity') $families
+        ($r.Hidden -join ',') | Should Be 'codex,antigravity-argon'
+        (Get-AgentViewProviderChange 'hide' 'claude' @('antigravity') @('claude','antigravity') $families).Error | Should Be 'keep_one'
+        (Get-AgentViewProviderChange 'hide' 'antigravity' @('claude','codex') @() $families).Error | Should Be 'keep_one'   # cả registry
+        (Get-AgentViewProviderChange 'hide' 'codex' @('codex') @('claude','codex') $families).Changed | Should Be $false
+        (Get-AgentViewProviderChange 'hide' 'gemini' @() @('claude') $families).Error | Should Be 'unknown'
+        (Get-AgentViewProviderChange 'hide' 'Claude' @() @('claude') $families).Error | Should Be 'unknown'
+        $r = Get-AgentViewProviderChange 'show' 'antigravity' @('codex','antigravity','antigravity-argon') @('claude') $families
+        $r.Changed | Should Be $true; ($r.Hidden -join ',') | Should Be 'codex'
+        $r = Get-AgentViewProviderChange 'show' 'antigravity-argon' @('antigravity','antigravity-argon') @('claude') $families
+        ($r.Hidden -join ',') | Should Be 'antigravity'
+        (Get-AgentViewProviderChange 'show' 'codex' @() @('claude') $families).Changed | Should Be $false
+    }
+    It 'lists every family with detection, visibility and known groups' {
+        $hist = Join-Path $TestDrive 'history.json'
+        [IO.File]::WriteAllText($hist, '[{"p":"claude","w":"5h","u":1},{"p":"antigravity-gemini","w":"5h","u":2},{"p":"antigravity-gemini","w":"week","u":2}]')
+        $groups = Get-AgentViewKnownGroups $hist @('antigravity-argon','codex')
+        ($groups -join ',') | Should Be 'antigravity-argon,antigravity-gemini'
+        $list = @(Get-AgentViewProviderList ([pscustomobject]@{ HiddenProviders = @('codex','antigravity-argon') }) @('claude','antigravity') $groups)
+        @($list | ForEach-Object Family) -join ',' | Should Be 'claude,codex,antigravity'
+        $list[1].Detected | Should Be $false; $list[1].Hidden | Should Be $true
+        @($list[2].Groups | ForEach-Object { '{0}={1}' -f $_.Id, $_.Hidden }) -join ',' | Should Be 'antigravity-argon=True,antigravity-gemini=False'
+        $text = (Format-AgentViewProviderLines $list | ForEach-Object Text) -join "`n"
+        $text | Should Match '✓ Claude Code\s+claude\s+phát hiện · hiện'
+        $text | Should Match '✗ Codex\s+codex\s+không thấy · ẩn'
+        $text | Should Match 'nhóm: antigravity-argon \(ẩn\), antigravity-gemini'
+        @(Get-AgentViewKnownGroups (Join-Path $TestDrive 'none.json') @()).Count | Should Be 0
+    }
+    It 'saves show/hide through the settings file' {
+        $paths = Get-AgentViewPaths "$TestDrive/lp" "$TestDrive/sp"
+        Mock Get-AgentDetectedProviders { 'claude'; 'codex' }
+        Mock Write-AgentViewStep { }
+        Invoke-AgentViewProviders $paths @('hide','codex') | Should Be 0
+        ((Get-AgentViewSettings $paths.Settings).HiddenProviders -join ',') | Should Be 'codex'
+        Invoke-AgentViewProviders $paths @('hide','claude') | Should Be 1
+        ((Get-AgentViewSettings $paths.Settings).HiddenProviders -join ',') | Should Be 'codex'
+        Invoke-AgentViewProviders $paths @('show','codex') | Should Be 0
+        @((Get-AgentViewSettings $paths.Settings).HiddenProviders).Count | Should Be 0
+        Invoke-AgentViewProviders $paths @('toggle','codex') | Should Be 1
+    }
+    It 'prints every multi-provider row in status with a wide name column' {
+        $now = [datetime]'2026-11-07T12:00:00'
+        $app = [pscustomobject]@{ Version='0.3.0'; State='running'; Autostart=$false; Widget=$false }
+        $rows = @(foreach ($p in @(@('claude','Claude Code'), @('codex','Codex'), @('antigravity-gemini','Antigravity · Gemini 3 Pro'), @('antigravity-3p','Antigravity · Claude/GPT'), @('antigravity-argon','Antigravity · Argon'))) {
+            [pscustomobject]@{ Provider=$p[0]; Name=$p[1]; Ok=$true; Error=$null; FiveHourUsed=20; WeekUsed=$null; FiveHourResetsAt=$now.AddHours(1); WeekResetsAt=$null; FetchedAt=$now } })
+        $text = (Format-AgentViewStatusLines $rows $app $now | ForEach-Object Text) -join "`n"
+        foreach ($n in @('Claude Code','Codex','Antigravity · Gemini 3 Pro','Antigravity · Claude/GPT','Antigravity · Argon')) { $text | Should Match ([regex]::Escape($n) + '\s+còn\s+80%') }
+        @((ConvertTo-AgentViewStatusJson $rows $app | ConvertFrom-Json).quotas).Count | Should Be 5
+    }
+}
+
+Describe 'providers command through a real child process' {
+    It 'lists and hides without mocks (Quota.ps1 loaded on demand)' {
+        $local = Join-Path $TestDrive 'real-local'; [void](New-Item -ItemType Directory -Path $local -Force)
+        $cli = Join-Path $PSScriptRoot '../src/Cli.ps1'
+        $saved = $env:LOCALAPPDATA
+        try {
+            $env:LOCALAPPDATA = $local
+            $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $cli providers 2>&1 | Out-String
+            $LASTEXITCODE | Should Be 0
+            $out | Should Match 'antigravity'
+            $out | Should Not Match 'New-QuotaOps'
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $cli providers hide antigravity-argon 2>&1 | Out-Null
+            $LASTEXITCODE | Should Be 0
+            ((Get-AgentViewSettings (Join-Path $local 'agent-view/settings.json')).HiddenProviders -join ',') | Should Be 'antigravity-argon'
+        } finally { $env:LOCALAPPDATA = $saved }
+    }
+}

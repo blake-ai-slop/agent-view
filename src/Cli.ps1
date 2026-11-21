@@ -60,6 +60,24 @@ Register-AgentViewStrings -Module 'cli' -Strings @{
         'did_you_mean_agentview' = 'Did you mean: agentview '
         'type_agentview_help_for_available_commands' = 'Type agentview help for available commands.'
         'error_running_agentview' = 'Error running "agentview '
+        'providers_help' = 'List agents (detected, shown/hidden, known groups)'
+        'providers_change_help' = 'Show or hide an agent or group in the tray/popup'
+        'providers_detected' = 'detected'
+        'providers_missing' = 'not found'
+        'providers_shown' = 'shown'
+        'providers_hidden' = 'hidden'
+        'providers_groups' = 'groups: '
+        'providers_group_hidden' = ' (hidden)'
+        'providers_change' = '(change: agentview providers show|hide <id>)'
+        'providers_use' = 'Use: agentview providers [show|hide <id>]'
+        'providers_unknown' = 'Unknown agent "{0}".'
+        'providers_ids' = 'Ids: {0} (or a group, e.g. antigravity-gemini)'
+        'providers_now_hidden' = '{0}: hidden'
+        'providers_now_shown' = '{0}: shown'
+        'providers_already_hidden' = '{0} is already hidden.'
+        'providers_already_shown' = '{0} is already shown.'
+        'providers_keep_one' = 'Cannot hide every agent — at least one must stay visible.'
+        'providers_next_refresh' = 'A running agent-view picks this up at its next refresh.'
     }
     vi = @{
         'widget_label' = ' · widget: '
@@ -121,13 +139,31 @@ Register-AgentViewStrings -Module 'cli' -Strings @{
         'did_you_mean_agentview' = 'Ý bạn là: agentview '
         'type_agentview_help_for_available_commands' = 'Gõ agentview help để xem danh sách lệnh.'
         'error_running_agentview' = 'Lỗi khi chạy "agentview '
+        'providers_help' = 'Liệt kê agent (phát hiện, hiện/ẩn, nhóm đã biết)'
+        'providers_change_help' = 'Hiện hoặc ẩn một agent/nhóm ở khay và popup'
+        'providers_detected' = 'phát hiện'
+        'providers_missing' = 'không thấy'
+        'providers_shown' = 'hiện'
+        'providers_hidden' = 'ẩn'
+        'providers_groups' = 'nhóm: '
+        'providers_group_hidden' = ' (ẩn)'
+        'providers_change' = '(đổi: agentview providers show|hide <id>)'
+        'providers_use' = 'Dùng: agentview providers [show|hide <id>]'
+        'providers_unknown' = 'Không có agent "{0}".'
+        'providers_ids' = 'Id: {0} (hoặc một nhóm, vd. antigravity-gemini)'
+        'providers_now_hidden' = '{0}: đã ẩn'
+        'providers_now_shown' = '{0}: đã hiện'
+        'providers_already_hidden' = '{0} đã ẩn sẵn.'
+        'providers_already_shown' = '{0} đang hiện sẵn.'
+        'providers_keep_one' = 'Không ẩn được hết agent — phải còn ít nhất một agent hiện.'
+        'providers_next_refresh' = 'agent-view đang chạy sẽ nhận ở lần làm mới kế.'
     }
 }
 # Lệnh `agentview` + hàm dùng chung cho installer.ps1/uninstall.ps1 (đường dẫn, phát hiện đang chạy, PATH người dùng, shim, tự chạy).
 # Dot-source không side effect. Chạy được trên Windows PowerShell 5.1 và pwsh 7; app luôn chạy bằng powershell.exe.
 # Biến môi trường ẩn cho thử nghiệm: AGENT_VIEW_STARTUP_DIR (thư mục Startup), AGENT_VIEW_USER_PATH_FILE (PATH người dùng giả).
 $script:AgentViewVersion = '0.0.0'  # dự phòng khi thiếu Version.ps1 (vd. bản sao tạm lúc gỡ); nguồn thật: src/Version.ps1
-$script:AgentViewCommands = @('up','start','down','stop','restart','status','lang','widget','autostart','update','uninstall','version','help')
+$script:AgentViewCommands = @('up','start','down','stop','restart','status','providers','lang','widget','autostart','update','uninstall','version','help')
 foreach ($__dep in @('Version.ps1','Settings.ps1','Format.ps1','Update.ps1')) { $__p = Join-Path $PSScriptRoot $__dep; if (Test-Path -LiteralPath $__p) { . $__p } }
 Remove-Variable __dep,__p -ErrorAction SilentlyContinue
 
@@ -285,13 +321,17 @@ function Format-AgentViewStatusLines($Quotas, $App, [datetime]$Now = (Get-Date))
     $lines = New-Object 'System.Collections.Generic.List[object]'
     $lines.Add([pscustomobject]@{ Text=(Get-AgentViewAppLine $App); Color=$(if ($App.State -eq 'running') { 'Green' } else { 'Yellow' }) })
     $lines.Add([pscustomobject]@{ Text=''; Color='Gray' })
-    foreach ($q in @($Quotas | Where-Object { $null -ne $_ })) {
+    $quotas = @($Quotas | Where-Object { $null -ne $_ })
+    # Cột tên rộng theo tên dài nhất (vd. 'Antigravity · Gemini 3 Pro'), tối thiểu 13 như trước.
+    $width = 13; foreach ($q in $quotas) { $width = [math]::Max($width, ([string]$q.Name).Length) }
+    foreach ($q in $quotas) {
         $remaining = Get-QuotaRemaining $q
+        $name = ([string]$q.Name).PadRight($width)
         if (-not $q.Ok -or $null -eq $remaining) {
-            $lines.Add([pscustomobject]@{ Text=('{0,-13} {1}' -f $q.Name, $q.Error); Color='DarkGray' }); continue
+            $lines.Add([pscustomobject]@{ Text=('{0,-13} {1}' -f $name, $q.Error); Color='DarkGray' }); continue
         }
         $level = Get-QuotaLevel $remaining
-        $lines.Add([pscustomobject]@{ Text=((T 'cli.left') -f $q.Name, $remaining, (Get-QuotaStatusText $level)); Color=(Get-AgentViewLevelColor $level) })
+        $lines.Add([pscustomobject]@{ Text=((T 'cli.left') -f $name, $remaining, (Get-QuotaStatusText $level)); Color=(Get-AgentViewLevelColor $level) })
         foreach ($w in @(@((T 'cli.5_hours'),$q.FiveHourUsed,$q.FiveHourResetsAt), @((T 'cli.week'),$q.WeekUsed,$q.WeekResetsAt))) {
             if ($null -eq $w[1]) { continue }  # provider có thể bỏ một cửa sổ (Ok nhưng 5h/Tuần = null)
             $left = 100 - [int]$w[1]
@@ -381,10 +421,11 @@ function Show-AgentViewHelp {
     $rows = @(
         @('lang [auto|vi|en]',(T 'cli.language_help')),
         @('up',(T 'cli.start_agent_view_if_stopped_alias_start')), @('down',(T 'cli.stop_agent_view_alias_stop')), @('restart',(T 'cli.restart_agent_view')),
-        @('status',(T 'cli.show_remaining_quota_and_app_status_json_machine_readable')), @('widget on|off',(T 'cli.turn_the_floating_widget_on_off')),
+        @('status',(T 'cli.show_remaining_quota_and_app_status_json_machine_readable')),
+        @('providers',(T 'cli.providers_help')), @('providers show|hide <id>',(T 'cli.providers_change_help')), @('widget on|off',(T 'cli.turn_the_floating_widget_on_off')),
         @('autostart on|off',(T 'cli.turn_start_at_windows_sign_in_on_off')), @('update',(T 'cli.update_to_the_latest_version_keeping_preferences')), @('update --check',(T 'update.check')),
         @('uninstall',(T 'cli.uninstall_agent_view_y_skip_confirmation')), @('version',(T 'cli.print_version')), @('help',(T 'cli.show_this_help')))
-    foreach ($r in $rows) { Write-Host ('  agentview {0,-17}' -f $r[0]) -ForegroundColor White -NoNewline; Write-Host $r[1] }
+    foreach ($r in $rows) { Write-Host ('  agentview {0,-17}' -f $r[0]) -ForegroundColor White -NoNewline; if ($r[0].Length -ge 17) { Write-Host ' ' -NoNewline }; Write-Host $r[1] }
 }
 function Invoke-AgentViewRestartIfRunning($Paths) {
     if ((Get-AgentViewRunState $Paths) -ne 'running') { return 0 }
@@ -415,6 +456,88 @@ function Invoke-AgentViewStatus($Paths, $Rest) {
     $quotas = @(Get-AgentQuotas)
     if ($json) { Write-Host (ConvertTo-AgentViewStatusJson $quotas $app); return 0 }
     foreach ($l in (Format-AgentViewStatusLines $quotas $app)) { Write-Host $l.Text -ForegroundColor $l.Color }
+    return 0
+}
+# ---------- providers ----------
+# Nhóm đã biết (id <family>-<group>): mẫu history (regex trên text, không parse cả file) + id nhóm đang ẩn.
+function Get-AgentViewKnownGroups([string]$HistoryPath, $Hidden) {
+    $ids = New-Object 'System.Collections.Generic.List[string]'
+    try {
+        if ($HistoryPath -and [IO.File]::Exists($HistoryPath)) {
+            foreach ($m in [regex]::Matches([IO.File]::ReadAllText($HistoryPath), '"p"\s*:\s*"([a-z0-9]+(?:-[a-z0-9]+)+)"')) { $v = $m.Groups[1].Value; if (-not $ids.Contains($v)) { $ids.Add($v) } }
+        }
+    } catch { }
+    foreach ($h in @($Hidden)) { $v = [string]$h; if ($v -like '*-*' -and -not $ids.Contains($v)) { $ids.Add($v) } }
+    return [string[]]@($ids | Sort-Object)
+}
+# Hàm thuần: mỗi Family một mục @{Family; Name; Detected; Hidden; Groups=@(@{Id; Hidden})}, thứ tự registry.
+function Get-AgentViewProviderList($Settings, $Detected, $KnownGroups) {
+    $hidden = @(@($Settings.HiddenProviders) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    foreach ($p in @(Get-AgentProviders)) {
+        $groups = @(foreach ($g in @($KnownGroups)) { if (([string]$g -split '-')[0] -ceq $p.Family) { [pscustomobject]@{ Id = [string]$g; Hidden = ($hidden -ccontains [string]$g) } } })
+        [pscustomobject]@{ Family = $p.Family; Name = $p.Name; Detected = (@($Detected) -ccontains $p.Family); Hidden = ($hidden -ccontains $p.Family); Groups = $groups }
+    }
+}
+function Format-AgentViewProviderLines($List) {
+    $out = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($p in @($List)) {
+        $mark = '✗'; $det = (T 'cli.providers_missing'); if ($p.Detected) { $mark = '✓'; $det = (T 'cli.providers_detected') }
+        $vis = (T 'cli.providers_shown'); if ($p.Hidden) { $vis = (T 'cli.providers_hidden') }
+        $color = 'DarkGray'; if ($p.Detected -and -not $p.Hidden) { $color = 'Green' } elseif ($p.Detected) { $color = 'Yellow' }
+        $out.Add([pscustomobject]@{ Text = ('  {0} {1,-13} {2,-12} {3} · {4}' -f $mark, $p.Name, $p.Family, $det, $vis); Color = $color })
+        if (@($p.Groups).Count) {
+            $g = @($p.Groups | ForEach-Object { $_.Id + $(if ($_.Hidden) { (T 'cli.providers_group_hidden') } else { '' }) }) -join ', '
+            $out.Add([pscustomobject]@{ Text = ('      ' + (T 'cli.providers_groups') + $g); Color = 'Gray' })
+        }
+    }
+    return $out.ToArray()
+}
+# Hàm thuần: HiddenProviders mới cho show|hide. Không bao giờ ẩn hết: mọi Family phát hiện được (hoặc mọi Family của
+# registry — Settings.ps1 sẽ bỏ cả danh sách) đều ẩn ⇒ Error 'keep_one'. Trả @{Hidden; Changed; Error}.
+function Get-AgentViewProviderChange([string]$Action, [string]$Id, $Hidden, $Detected, $Families) {
+    $list = [string[]]@(@($Hidden) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $r = [pscustomobject]@{ Hidden = $list; Changed = $false; Error = $null }
+    if ($Id -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$' -or @($Families) -cnotcontains ($Id -split '-')[0]) { $r.Error = 'unknown'; return $r }
+    if ($Action -eq 'hide') {
+        if ($list -ccontains $Id) { return $r }
+        $new = [string[]]@($list + $Id)
+        $visible = @(@($Detected) | Where-Object { $new -cnotcontains $_ })
+        $allRegistry = @(@($Families) | Where-Object { $new -cnotcontains $_ }).Count -eq 0
+        if ((@($Detected).Count -gt 0 -and $visible.Count -eq 0) -or $allRegistry) { $r.Error = 'keep_one'; return $r }
+        $r.Hidden = $new; $r.Changed = $true; return $r
+    }
+    # show: bỏ id; Family ⇒ bỏ luôn id nhóm của nó.
+    $new = [string[]]@($list | Where-Object { $_ -cne $Id -and -not ($Id -cnotlike '*-*' -and ($_ -split '-')[0] -ceq $Id) })
+    $r.Changed = ($new.Count -ne $list.Count); $r.Hidden = $new
+    return $r
+}
+function Invoke-AgentViewProviders($Paths, $Rest) {
+    $rest = @($Rest | Where-Object { $null -ne $_ })
+    if (-not (Get-Command New-QuotaOps -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'Quota.ps1') }   # Providers.ps1 cần Quota.ps1
+    $detected = [string[]]@(Get-AgentDetectedProviders -Rescan)   # chỉ kiểm file, không chạy CLI
+    $families = [string[]]@(Get-AgentProviders | ForEach-Object { $_.Family })
+    $settings = Get-AgentViewSettings $Paths.Settings
+    if ($rest.Count -eq 0) {
+        $groups = Get-AgentViewKnownGroups (Join-Path $Paths.Root 'history.json') $settings.HiddenProviders
+        foreach ($l in (Format-AgentViewProviderLines (Get-AgentViewProviderList $settings $detected $groups))) { Write-Host $l.Text -ForegroundColor $l.Color }
+        Write-Host ''
+        Write-Host ('  ' + (T 'cli.providers_change')) -ForegroundColor DarkGray
+        return 0
+    }
+    $action = ([string]$rest[0]).ToLowerInvariant()
+    if (@('show','hide') -notcontains $action -or $rest.Count -ne 2) { Write-AgentViewStep fail (T 'cli.providers_use'); return 1 }
+    $id = ([string]$rest[1]).ToLowerInvariant()
+    $change = Get-AgentViewProviderChange $action $id $settings.HiddenProviders $detected $families
+    if ($change.Error -eq 'unknown') { Write-AgentViewStep fail (T 'cli.providers_unknown' -Args @($rest[1])) (T 'cli.providers_ids' -Args @($families -join ', ')); return 1 }
+    if ($change.Error -eq 'keep_one') { Write-AgentViewStep fail (T 'cli.providers_keep_one'); return 1 }
+    if (-not $change.Changed) {
+        $key = 'cli.providers_already_shown'; if ($action -eq 'hide') { $key = 'cli.providers_already_hidden' }
+        Write-AgentViewStep info (T $key -Args @($id)); return 0
+    }
+    $settings.HiddenProviders = $change.Hidden
+    Save-AgentViewSettings $settings $Paths.Settings
+    $key = 'cli.providers_now_shown'; if ($action -eq 'hide') { $key = 'cli.providers_now_hidden' }
+    Write-AgentViewStep ok (T $key -Args @($id)) (T 'cli.providers_next_refresh')
     return 0
 }
 function Invoke-AgentViewToggle($Paths, [string]$What, $Rest) {
@@ -504,6 +627,7 @@ function Invoke-AgentViewCli([string[]]$Argv, $Paths = (Get-AgentViewPaths)) {
             down { return (Invoke-AgentViewDown $Paths) }
             restart { [void](Invoke-AgentViewDown $Paths); return (Invoke-AgentViewUp $Paths) }
             status { return (Invoke-AgentViewStatus $Paths $cmd.Rest) }
+            providers { return (Invoke-AgentViewProviders $Paths $cmd.Rest) }
             widget { return (Invoke-AgentViewToggle $Paths 'widget' $cmd.Rest) }
             autostart { return (Invoke-AgentViewToggle $Paths 'autostart' $cmd.Rest) }
             update {

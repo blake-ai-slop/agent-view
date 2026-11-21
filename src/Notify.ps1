@@ -64,7 +64,7 @@ function Get-AgentViewNotifyLabel([string]$Window) {
 function Get-AgentViewNotifications($Rows, $State, $Settings, [datetime]$Now = (Get-Date)) {
     $enabled = [bool](Get-AgentViewNotifySetting $Settings 'NotifyEnabled' $true)
     $notifyReset = [bool](Get-AgentViewNotifySetting $Settings 'NotifyReset' $true)
-    $hidden = @(Get-AgentViewNotifySetting $Settings 'HiddenProviders' @()) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ }
+    $hidden = @(@(Get-AgentViewNotifySetting $Settings 'HiddenProviders' @()) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
     $thresholds = @(Get-AgentViewNotifyThresholds $Settings)
     $high = if ($thresholds.Count) { $thresholds[0] } else { $null }
     $nowUtc = $Now.ToUniversalTime()
@@ -85,10 +85,10 @@ function Get-AgentViewNotifications($Rows, $State, $Settings, [datetime]$Now = (
     }
 
     $list = New-Object System.Collections.ArrayList
-    $rowList = if (Get-Command ConvertTo-QuotaRows -ErrorAction SilentlyContinue) { @(ConvertTo-QuotaRows $Rows) } else { @($Rows) }
+    # Quy tắc ẩn dùng chung (Format.ps1): id = Provider hoặc Family, ẩn hết ⇒ hiện lại tất cả.
+    $rowList = if (Get-Command Select-QuotaShownRows -ErrorAction SilentlyContinue) { @(Select-QuotaShownRows $Rows $hidden) } else { @(@($Rows) | Where-Object { $hidden -notcontains $_.Provider }) }
     foreach ($row in $rowList) {
         if ($null -eq $row -or $row.Ok -ne $true -or $row.Provider -isnot [string]) { continue }
-        if ($hidden -contains $row.Provider) { continue }
         $display = if ($row.Name) { [string]$row.Name } else { $row.Provider }
         foreach ($w in @(@('5h', 'FiveHourUsed', 'FiveHourResetsAt'), @('week', 'WeekUsed', 'WeekResetsAt'))) {
             $used = $row.($w[1])

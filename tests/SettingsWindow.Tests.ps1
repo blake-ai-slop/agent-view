@@ -1,9 +1,10 @@
-﻿. "$PSScriptRoot/../src/SettingsWindow.ps1"
+﻿. "$PSScriptRoot/../src/Tray.ps1"
 Describe 'Settings window' {
     BeforeEach {
         $script:settingsOldLocal=$env:LOCALAPPDATA
         $env:LOCALAPPDATA=Join-Path $TestDrive ([guid]::NewGuid().ToString("N"))
         Set-AgentViewLanguage en
+        Mock Get-AgentViewProviderView { @{ Detected=@('claude','codex'); NoAgent=$false } }
         Mock Test-AgentViewAutostart { $false }
         Mock Set-AgentViewAutostart {}
         Close-AgentViewSettingsWindow -Force
@@ -72,6 +73,65 @@ Describe 'Settings window' {
         }
         Assert-MockCalled Set-AgentViewAutostart -Times 1 -Exactly -ParameterFilter { $Enabled -eq $true }
         (Get-AgentViewSettingsWindowState).Window | Should Be $null
+    }
+    It 'uses registry order, history and row labels, and locks the last visible group' {
+        Mock Get-AgentViewProviderView { @{ Detected=@('antigravity'); NoAgent=$false } }
+        $paths=Get-AgentViewPaths
+        [void][IO.Directory]::CreateDirectory($paths.Root)
+        $history = @(
+            @{ p='antigravity-gemini'; w='5h'; u=20; t='2026-11-21T00:00:00Z' }
+            @{ p='antigravity-3p'; w='5h'; u=30; t='2026-11-21T00:00:00Z' }
+            @{ p='antigravity-argon'; w='5h'; u=40; t='2026-11-21T00:00:00Z' }
+        )
+        [IO.File]::WriteAllText((Join-Path $paths.Root 'history.json'), ($history | ConvertTo-Json))
+        Show-AgentViewSettingsWindow -Rows @(@{ Provider='antigravity-3p'; Group='Claude/GPT' })
+        $st=Get-AgentViewSettingsWindowState
+        ($st.Providers.Id -join ',') | Should Be 'claude,codex,antigravity'
+        $st.Providers[0].Missing.Visibility | Should Be Visible
+        $st.Providers[0].Missing.Text | Should Be 'Not installed'
+        $st.Providers[0].Box.IsEnabled | Should Be $false
+        $st.Ui.Rescan.Visibility | Should Be Collapsed
+        $agy=$st.Providers[2]
+        $agy.Groups.Box.Content -join ',' | Should Be 'Claude/GPT,Gemini,Argon'
+        foreach ($index in 0,2) {
+            $agy.Groups[$index].Box.IsChecked=$false
+            $agy.Groups[$index].Box.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.CheckBox]::ClickEvent)))
+        }
+        $agy.Box.IsChecked | Should Be $null
+        $agy.Box.IsEnabled | Should Be $false
+        $agy.Groups[0].Box.IsEnabled | Should Be $true
+        $agy.Groups[1].Box.IsEnabled | Should Be $false
+        $st.Ui.ProviderHint.Visibility | Should Be Visible
+        Save-AgentViewSettingsWindow | Should Be $true
+        ((Get-AgentViewSettings).HiddenProviders -join ',') | Should Be 'antigravity-3p,antigravity-argon'
+    }
+    It 'round-trips unseen hidden groups and saves a hidden Family without listed group ids' {
+        Mock Get-AgentViewProviderView { @{ Detected=@('claude','antigravity'); NoAgent=$false } }
+        $paths=Get-AgentViewPaths
+        $settings=Get-AgentViewSettings
+        $settings.HiddenProviders=@('antigravity-argon','antigravity-3p')
+        Save-AgentViewSettings $settings
+        $before=[Convert]::ToBase64String([IO.File]::ReadAllBytes($paths.Settings))
+        $rows=@(@{ Provider='antigravity-3p' },@{ Provider='antigravity-gemini' })
+        Show-AgentViewSettingsWindow -Rows $rows
+        Save-AgentViewSettingsWindow | Should Be $true
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($paths.Settings)) | Should Be $before
+
+        Show-AgentViewSettingsWindow -Rows $rows
+        $agy=(Get-AgentViewSettingsWindowState).Ui.Antigravity
+        $agy.IsChecked=$false
+        $agy.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.CheckBox]::ClickEvent)))
+        Save-AgentViewSettingsWindow | Should Be $true
+        ((Get-AgentViewSettings).HiddenProviders -join ',') | Should Be 'antigravity-argon,antigravity'
+    }
+    It 'calls the optional rescan callback' {
+        $hits=@{ Count=0 }
+        Show-AgentViewSettingsWindow -OnRescan { $hits.Count++; $true }.GetNewClosure()
+        $scan=(Get-AgentViewSettingsWindowState).Ui.Rescan
+        $scan.Visibility | Should Be Visible
+        $scan.Content | Should Be Rescan
+        $scan.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent)))
+        $hits.Count | Should Be 1
     }
     It 'cancels with button and Escape without writing settings' {
         Show-AgentViewSettingsWindow -OnSaved { throw 'Must not run' }

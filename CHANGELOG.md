@@ -1,5 +1,28 @@
 ﻿# Changelog
 
+## v0.3.0
+
+### Added
+
+- **Antigravity CLI support.** Agent-view now shows the quota of Google's Antigravity CLI (`agy`) next to Claude Code and Codex: each Antigravity model group (Gemini, Claude/GPT, Argon) gets its own row with its 5-hour and weekly limits. The quota is read with `agy -p /usage`, which makes no model turn, at most once every 5 minutes (refreshing yourself asks again if the last query was at least 30 seconds ago).
+- **Agent detection.** Agent-view finds which supported agents are installed (it only checks for the CLI files; nothing is started) when it starts, when you refresh, and when you press **Rescan**. Agents that are not installed are not shown, and none of their tools are run. If no supported agent is found, the popup, tray icon and widget say so and list the supported agents.
+- **Choose agents when installing.** The installer lists the agents it found and asks which ones to show (Enter keeps the detected ones). Use `-Providers claude,antigravity` or `AGENT_VIEW_PROVIDERS` to choose without prompts. Reinstalling keeps your choice.
+- **New agents appear by themselves.** If you install a supported agent later, it is added automatically with one notification; you can hide it in Settings.
+- `agentview providers` lists agents (detected, shown or hidden, known groups); `agentview providers show|hide <id>` shows or hides an agent or a single group such as `antigravity-argon`.
+
+### Changed
+
+- **Compact popup.** Each agent or group is one row with a small ring and mini 5-hour and weekly bars; click a row to see reset times and the forecast. The popup scrolls when it is taller than the screen.
+- The widget shows one ring per agent (its tightest group) and lists the groups when you hover.
+- Popup, widget and notifications show the official Claude, OpenAI and Antigravity logos.
+- Settings lists every supported agent with its groups, marks agents that are not installed, has a **Rescan** button, and never lets you hide the last visible agent.
+- Hidden agents are no longer queried at all, which saves a CLI start on every refresh.
+- The tray tooltip groups the summary per agent so it always fits.
+
+### Fixed
+
+- Saving Settings no longer drops hidden entries that are not shown in the window.
+
 ## v0.2.4
 
 ### Changed

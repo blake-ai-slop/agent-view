@@ -5,12 +5,14 @@ Register-AgentViewStrings -Module 'widget' -Strings @{
         'five' = '5h {0}'
         'week' = 'Week {0}'
         'runout' = 'out ~{0}'
+        'no_agent' = 'No agent yet'
     }
     vi = @{
         'title' = 'agent-view widget'
         'five' = '5h {0}'
         'week' = 'Tuần {0}'
         'runout' = 'hết ~{0}'
+        'no_agent' = 'Chưa có agent'
     }
 }
 # Widget Bezel nổi bám cạnh màn hình, tạo lười trên thread STA của tray. Dot-source chỉ định nghĩa hàm.
@@ -38,6 +40,36 @@ function Get-AgentViewWidgetDetailText($Model, [datetime]$Now = (Get-Date)) {
     $text
 }
 
+# Mô hình một vòng widget cho một Family (Group = phần tử Get-AgentViewFamilyGroups): vòng lấy nhóm sát giới hạn nhất
+# (còn lại thấp nhất trong các row đọc được); Lines = mỗi row một dòng chi tiết (Family nhiều nhóm ⇒ có tiền tố tên nhóm).
+function Get-AgentViewWidgetFamilyModel($Group, [switch]$Loading, [datetime]$Now = (Get-Date), $History = $null) {
+    $rows = @($Group.Rows)
+    $models = @(foreach ($r in $rows) { Get-AgentViewCardModel $r -Loading:$Loading -Now $Now -History $History })
+    $ok = @($models | Where-Object { $_.State -eq 'ok' })
+    $state = 'error'; $value = $null
+    if ($Loading) { $state = 'loading' }
+    elseif ($ok.Count) { $state = 'ok'; $value = [int](($ok | Measure-Object -Property Value -Minimum).Minimum) }
+    $level = 'unk'; if ($state -eq 'ok') { $level = Get-QuotaLevel $value }
+    $name = $(if ($models.Count -eq 1) { $models[0].Name } else { Get-AgentViewFamilyName $Group.Family })
+    $lines = @(foreach ($m in $models) {
+        $text = $(if ($m.State -eq 'ok') { Get-AgentViewWidgetDetailText $m $Now } elseif ($m.State -eq 'loading') { $m.Sub } else { $m.ErrDetail })
+        if ($models.Count -gt 1) { $label = $m.Group; if (-not $label) { $label = $m.Name }; $text = "$label · $text" }
+        $text
+    })
+    [pscustomobject]@{
+        Family = $Group.Family; Name = $name; State = $state; Value = $value; Level = $level; Lines = $lines
+        Label = $(if ($Loading) { '…' } elseif ($state -eq 'error') { '?' } else { "$value%" })
+    }
+}
+
+# Widget khi không có row: NoAgent ⇒ vòng xám "chưa có agent"; chưa quét xong ⇒ "Đang tìm agent…".
+function Get-AgentViewWidgetEmptyModel([bool]$NoAgent) {
+    [pscustomobject]@{
+        Family = $null; Name = 'agent-view'; State = 'error'; Value = $null; Level = 'unk'
+        Lines = @($(if ($NoAgent) { T 'widget.no_agent' } else { T 'popup.looking_for_agents' })); Label = '–'
+    }
+}
+
 function Get-AgentViewWidgetEdge($Area, [double]$X, [double]$Y) {
     $d = @{ left = [math]::Abs($X - $Area.Left); right = [math]::Abs($Area.Right - $X); top = [math]::Abs($Y - $Area.Top) }
     @('right', 'left', 'top') | Sort-Object { $d[$_] } | Select-Object -First 1
@@ -57,7 +89,7 @@ function Get-AgentViewWidgetPlacement($Area, [string]$Edge, $Offset, [double]$Wi
 
 function Get-AgentViewWidgetState {
     Get-AgentViewUiState 'agent-view.widget' {
-        @{ Window = $null; Cards = @(); Settings = (Get-AgentViewSettings); Screen = $null; Scale = 1; DockTimer = $null; CloseTimer = $null; OnOpenPopup = $null }
+        @{ Window = $null; Cards = @(); CardKeys = $null; Settings = (Get-AgentViewSettings); Screen = $null; Scale = 1; DockTimer = $null; CloseTimer = $null; OnOpenPopup = $null }
     }
 }
 
@@ -116,7 +148,8 @@ function Set-AgentViewWidgetExpanded([bool]$Expanded) {
     $ms = $(if ($Expanded) { 220 } else { 160 })
     foreach ($c in $s.Cards) {
         $c.Detail.Margin = $(if (-not $Expanded) { '0' } elseif ($top) { '0,6,0,0' } else { '6,0,8,0' })
-        $c.Detail.BeginAnimation($property, (New-AgentViewDoubleAnimation $null $target $ms))
+        $t = $target; if ($top -and $Expanded) { $t = 28 + 16 * [math]::Max(1, [int]$c.LineCount) }
+        $c.Detail.BeginAnimation($property, (New-AgentViewDoubleAnimation $null $t $ms))
         $c.Detail.BeginAnimation([Windows.UIElement]::OpacityProperty, (New-AgentViewDoubleAnimation $null ([double][int]$Expanded) 160 ''))
     }
 }
@@ -154,11 +187,11 @@ function New-AgentViewWidgetWindow {
     $w.Add_SizeChanged({ $s = Get-AgentViewWidgetState; if ($s.Screen) { Set-AgentViewWidgetDock } })
 }
 
-# Một thẻ mỗi provider: vòng 40px + nhãn % (thu gọn), tên + dòng chi tiết (mở khi rê chuột).
-function New-AgentViewWidgetCard($Row, $Theme) {
+# Một thẻ mỗi Family: vòng 40px có logo + nhãn % (thu gọn), tên + các dòng chi tiết (mở khi rê chuột).
+function New-AgentViewWidgetCard([string]$Family, $Theme) {
     $panel = New-Object Windows.Controls.StackPanel; $panel.Margin = '0,4,0,4'
     $compact = New-Object Windows.Controls.StackPanel; $compact.Width = 48; $compact.FlowDirection = 'LeftToRight'
-    $ring = New-AgentRing -Size 40 -Stroke 4 -Icon $Row.Provider -IconSize 18
+    $ring = New-AgentRing -Size 40 -Stroke 4 -Icon $Family -IconSize 18
     $ring.HorizontalAlignment = 'Center'; [void]$compact.Children.Add($ring)
     $label = New-Object Windows.Controls.TextBlock; $label.FontSize = 12; $label.FontWeight = 'SemiBold'; $label.HorizontalAlignment = 'Center'
     [void]$compact.Children.Add($label)
@@ -168,25 +201,30 @@ function New-AgentViewWidgetCard($Row, $Theme) {
     [void]$detail.Children.Add($name); [void]$detail.Children.Add($line)
     [void]$panel.Children.Add($compact); [void]$panel.Children.Add($detail)
     $panel.Add_MouseLeftButtonUp({ $s = Get-AgentViewWidgetState; if ($s.OnOpenPopup) { & $s.OnOpenPopup } })
-    @{ Panel = $panel; Compact = $compact; Detail = $detail; Name = $name; Line = $line; Label = $label; Ring = $ring }
+    @{ Panel = $panel; Compact = $compact; Detail = $detail; Name = $name; Line = $line; Label = $label; Ring = $ring; Family = $Family; LineCount = 1 }
 }
 
 function Update-AgentViewWidget {
     param($Rows, [switch]$Loading)
     $s = Get-AgentViewWidgetState; if (-not (Test-AgentViewWidgetVisible)) { return }
     $theme = Get-AgentViewTheme
-    $rowsFlat = @(Get-AgentViewDisplayRows $Rows)
-    if ($s.Cards.Count -ne $rowsFlat.Count) {
+    $view = Get-AgentViewUiProviderView $s.Settings
+    $rowsFlat = @(Get-AgentViewDisplayRows $Rows $view)
+    $history = Get-AgentViewPopupHistory; $now = Get-Date
+    $models = @(foreach ($g in @(Get-AgentViewFamilyGroups $rowsFlat)) { Get-AgentViewWidgetFamilyModel $g -Loading:$Loading -Now $now -History $history })
+    if (-not $models.Count) { $models = @(Get-AgentViewWidgetEmptyModel ([bool]$view.NoAgent)) }
+    $keys = (@($models | ForEach-Object { [string]$_.Family }) -join '|')
+    if ($s.CardKeys -ne $keys -or $s.Cards.Count -ne $models.Count) {
         foreach ($c in $s.Cards) { Suspend-AgentRing $c.Ring }
         while ($s.List.Children.Count -gt 1) { $s.List.Children.RemoveAt(1) }
-        $s.Cards = @(foreach ($r in $rowsFlat) { $c = New-AgentViewWidgetCard $r $theme; [void]$s.List.Children.Add($c.Panel); $c })
+        $s.Cards = @(foreach ($m in $models) { $c = New-AgentViewWidgetCard $m.Family $theme; [void]$s.List.Children.Add($c.Panel); $c })
+        $s.CardKeys = $keys
     }
-    $history = Get-AgentViewPopupHistory; $now = Get-Date
-    for ($i = 0; $i -lt $rowsFlat.Count; $i++) {
-        $c = $s.Cards[$i]; $m = Get-AgentViewCardModel $rowsFlat[$i] -Loading:$Loading -Now $now -History $history
+    for ($i = 0; $i -lt $models.Count; $i++) {
+        $c = $s.Cards[$i]; $m = $models[$i]
         $c.Name.Text = $m.Name
-        $c.Line.Text = $(if ($m.State -eq 'ok') { Get-AgentViewWidgetDetailText $m $now } else { $m.ErrDetail })
-        $c.Label.Text = $(if ($Loading) { '…' } elseif ($m.State -eq 'error') { '?' } else { "$($m.Value)%" })
+        $c.Line.Text = (@($m.Lines) -join "`n"); $c.LineCount = @($m.Lines).Count
+        $c.Label.Text = $m.Label
         $c.Label.Foreground = ConvertTo-AgentViewBrush $theme[$m.Level]
         $label = $c.Label
         $tick = { param($v) $label.Text = ([string][int][math]::Round($v)) + '%' }.GetNewClosure()
@@ -210,5 +248,5 @@ function Hide-AgentViewWidget {
     $s = Get-AgentViewWidgetState
     if ($s.CloseTimer) { $s.CloseTimer.Stop() }; if ($s.DockTimer) { $s.DockTimer.Stop() }
     foreach ($c in $s.Cards) { Suspend-AgentRing $c.Ring; if ($c.Ring.Tag.Timer) { $c.Ring.Tag.Timer.Stop(); $c.Ring.Tag.Timer = $null } }
-    if ($s.Window) { $s.Window.Close(); $s.Window = $null; $s.Cards = @() }
+    if ($s.Window) { $s.Window.Close(); $s.Window = $null; $s.Cards = @(); $s.CardKeys = $null }
 }

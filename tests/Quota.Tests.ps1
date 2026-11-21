@@ -8,6 +8,9 @@ function New-TestOps([hashtable]$Over) {
   $ops = @{
     FallbackState = @{}
     CodexState    = @{}
+    AntigravityState = @{}
+    # Phát hiện provider đặt sẵn claude+codex: các test cũ đọc cả hai row như trước (phát hiện thật: Providers.Tests).
+    ProviderPresence = @{ Families = [string[]]@('claude', 'codex') }
     Now      = { [DateTime]::SpecifyKind((New-Object DateTime 2026, 11, 7, 12, 0, 0), 'Local') }
     GetEnv   = { param($n) $null }
     HomeDir  = { 'C:\home' }
@@ -221,7 +224,7 @@ Describe 'Get-AgentQuotas' {
     $q[1].FiveHourUsed | Should Be 42
     $q[1].WeekUsed | Should Be 2
     $q[1].FetchedAt | Should Be $fetched.AddMinutes(5)
-    @($q[0].PSObject.Properties.Name) -join ',' | Should Be 'Provider,Name,Ok,Error,FiveHourUsed,WeekUsed,FiveHourResetsAt,WeekResetsAt,FetchedAt'
+    @($q[0].PSObject.Properties.Name) -join ',' | Should Be 'Provider,Name,Ok,Error,FiveHourUsed,WeekUsed,FiveHourResetsAt,WeekResetsAt,FetchedAt,Family,Group'
   }
 
   It 'CLAUDE_CONFIG_DIR được dùng' {
@@ -750,10 +753,10 @@ Describe 'Codex app-server throttle' {
     $null = Get-AgentQuotas -Ops $ops -Manual
     $clock.Calls | Should Be 1
     $clock.Now = $base.AddSeconds(29)
-    (Get-AgentQuotas -Ops $ops -Manual)[1].FetchedAt | Should Be $base
+    @(Get-AgentQuotas -Ops $ops -Manual | Where-Object { $_.Provider -eq 'codex' })[0].FetchedAt | Should Be $base
     $clock.Calls | Should Be 1
     $clock.Now = $base.AddSeconds(30)
-    (Get-AgentQuotas -Ops $ops -Manual)[1].FetchedAt | Should Be $base.AddSeconds(30)
+    @(Get-AgentQuotas -Ops $ops -Manual | Where-Object { $_.Provider -eq 'codex' })[0].FetchedAt | Should Be $base.AddSeconds(30)
     $clock.Calls | Should Be 2
     $clock.Now = $base.AddSeconds(90)
     $null = Get-AgentQuotas -Ops $ops
@@ -772,9 +775,9 @@ Describe 'Codex app-server throttle' {
         if ($i.File -eq 'C:\bin\claude.exe') { $clock.Claude++; return @{ ExitCode = 0; TimedOut = $false; Lines = @('{"num_turns":0,"is_error":false,"result":""}') } }
         $clock.Calls++; @{ TimedOut = $false; ExitCode = $null; Lines = $lines } }.GetNewClosure()
     }
-    $null = Get-AgentQuotas -Ops $ops -Manual
+    $null = Get-AgentQuotas -Ops $ops -Manual -Skip antigravity
     $clock.Now = $clock.Now.AddMinutes(1)
-    $q = Get-AgentQuotas -Ops $ops -Manual
+    $q = Get-AgentQuotas -Ops $ops -Manual -Skip antigravity
     $q.Count | Should Be 2
     $q[0].Provider | Should Be 'claude'; $q[1].Provider | Should Be 'codex'
     $clock.Claude | Should Be 1
@@ -829,6 +832,7 @@ Describe 'Codex app-server throttle' {
             Find = { param($n) if ($n -eq 'codex') { $cli } }.GetNewClosure()
             ReadText = { param($p) $null }
             GetEnv = { param($n) $null }
+            ProviderPresence = @{ Families = [string[]]@('claude', 'codex') }
             Run = { param($i, $s, $o, $t) [void]$calls.Add(1); Start-Sleep -Milliseconds 800; @{ TimedOut = $false; ExitCode = $null; Lines = $lines } }.GetNewClosure()
           }
           @(Get-AgentQuotas -Ops $ops)[1]

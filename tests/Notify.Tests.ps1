@@ -90,6 +90,18 @@ Describe 'Get-AgentViewNotifications' {
         $r.Notifications[0].Provider | Should Be 'claude'
         $r.State.w['codex|5h'].r | Should Be 50
     }
+    It 'hides by family id and falls back to all rows when every provider is hidden' {
+        $ag = New-Row 'codex' -FiveUsed 95
+        $ag[0].Provider = 'antigravity-argon'; $ag[0].Name = 'Antigravity · Argon'
+        $ag[0] | Add-Member -NotePropertyName Family -NotePropertyValue 'antigravity'
+        $r = Step @((New-Row -FiveUsed 95 -FiveReset $script:Reset1), $ag[0]) $null @{ HiddenProviders = @('antigravity') }
+        @($r.Notifications | ForEach-Object { $_.Provider }) -join ',' | Should Be 'claude'
+        $r = Step @((New-Row -FiveUsed 95 -FiveReset $script:Reset1), $ag[0]) $null @{ HiddenProviders = @('antigravity-argon') }
+        @($r.Notifications | ForEach-Object { $_.Provider }) -join ',' | Should Be 'claude'
+        # Cài đặt cũ ẩn claude+codex trên máy chỉ có hai provider đó ⇒ vẫn báo như không ẩn.
+        $r = Step @((New-Row -FiveUsed 95 -FiveReset $script:Reset1), (New-Row 'codex' -FiveUsed 95)) $null @{ HiddenProviders = @('claude','codex') }
+        @($r.Notifications | ForEach-Object { $_.Provider }) -join ',' | Should Be 'claude,codex'
+    }
     It 'NotifyEnabled=false emits nothing but still updates state' {
         $r = Step (New-Row -FiveUsed 50 -FiveReset $script:Reset1) $null
         $r = Step (New-Row -FiveUsed 95 -FiveReset $script:Reset1) $r.State @{ NotifyEnabled = $false } 1

@@ -260,3 +260,86 @@ Describe 'Integration: settings apply and refresh interval' {
     $env:LOCALAPPDATA = $savedLocal
     [AppDomain]::CurrentDomain.SetData('agent-view.language', $savedLanguage)
 }
+
+Describe 'Integration: multi-provider refresh (v0.3.0)' {
+    $savedLocal = $env:LOCALAPPDATA
+    $savedLanguage = [AppDomain]::CurrentDomain.GetData('agent-view.language')
+    $savedPresence = [AppDomain]::CurrentDomain.GetData('agent-view.ProviderPresence')
+    function Set-IntPresence($Families) {
+        $state = [hashtable]::Synchronized(@{})
+        if ($null -ne $Families) { $state['Families'] = [string[]]@($Families) }
+        [AppDomain]::CurrentDomain.SetData('agent-view.ProviderPresence', $state)
+    }
+    function New-AgRow([string]$Group, $Five, [datetime]$Reset) {
+        $r = [pscustomobject]@{ Provider = "antigravity-$Group"; Name = "Antigravity · $Group model group with a long label"; Ok = $true; Error = $null; FiveHourUsed = $Five; WeekUsed = $null
+            FiveHourResetsAt = $Reset; WeekResetsAt = $null; FetchedAt = (Get-Date) }
+        $r | Add-Member -NotePropertyMembers @{ Family = 'antigravity'; Group = $Group }
+        $r
+    }
+    BeforeEach {
+        $env:LOCALAPPDATA = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force)
+        Reset-IntegrateState
+        Set-AgentViewLanguage en
+        Initialize-AgentViewTrayNative
+    }
+    AfterEach {
+        Reset-IntegrateState
+        $ws = (Get-AgentViewWidgetState).Settings
+        $ws | Add-Member -NotePropertyName HiddenProviders -NotePropertyValue @() -Force
+        $ws | Add-Member -NotePropertyName KnownProviders -NotePropertyValue @() -Force
+    }
+
+    It 'shows five rows, a <=63 tooltip, and hides antigravity by family' {
+        Mock Test-AgentViewUserBusy { $true }
+        Set-IntPresence @('claude','codex','antigravity')
+        $ws = (Get-AgentViewWidgetState).Settings
+        $ws | Add-Member -NotePropertyName KnownProviders -NotePropertyValue @('claude','codex','antigravity') -Force
+        $tray = New-FakeTray
+        $now = Get-Date; $r5 = $now.AddHours(2); $rw = $now.AddDays(3)
+        $rows = @((New-IntRow 'claude' 30 20 $r5 $rw), (New-IntRow 'codex' 10 5 $r5 $rw), (New-AgRow 'gemini' 40 $r5), (New-AgRow '3p' 60 $r5), (New-AgRow 'argon' 20 $r5))
+        Complete-AgentViewRefresh $tray $rows -Now $now
+        @($tray.State.View).Count | Should Be 5
+        $tray.Notify.Text.Length | Should BeLessThan 64
+        $tray.Notify.Text | Should Be "agent-view`nClaude 70%`nCodex 90%`nAntigravity 40% (3 groups)"
+        @((Get-AgentViewPopupState).Rows).Count | Should Be 5
+        $ws | Add-Member -NotePropertyName HiddenProviders -NotePropertyValue @('antigravity') -Force
+        Complete-AgentViewRefresh $tray $rows -Now $now.AddMinutes(1)
+        @($tray.State.View | ForEach-Object Provider) -join ',' | Should Be 'claude,codex'
+        $tray.Notify.Text | Should Be "agent-view`nClaude 70%`nCodex 90%"
+        $ws | Add-Member -NotePropertyName HiddenProviders -NotePropertyValue @('antigravity-argon') -Force
+        Complete-AgentViewRefresh $tray $rows -Now $now.AddMinutes(2)
+        @($tray.State.View | ForEach-Object Provider) -join ',' | Should Be 'claude,codex,antigravity-gemini,antigravity-3p'
+        $tray.Notify.Balloons.Count | Should Be 0
+    }
+    It 'shows the empty state when no agent is detected' {
+        Set-IntPresence @()
+        $tray = New-FakeTray
+        Complete-AgentViewRefresh $tray @() -Now (Get-Date)
+        $tray.State.NoAgent | Should Be $true
+        $tray.Notify.Text | Should Be 'No agent detected (Claude Code, Codex, Antigravity)'
+        $tray.Notify.Icon | Should Not BeNullOrEmpty
+        (Get-AgentViewProviderView (Get-AgentViewWidgetState).Settings).NoAgent | Should Be $true
+    }
+    It 'toasts once (balloon while busy) when a provider appears after install and unhides it' {
+        Mock Test-AgentViewUserBusy { $true }
+        $ws = (Get-AgentViewWidgetState).Settings
+        $ws | Add-Member -NotePropertyName KnownProviders -NotePropertyValue @('claude','codex') -Force
+        $ws | Add-Member -NotePropertyName HiddenProviders -NotePropertyValue @('antigravity') -Force
+        Set-IntPresence @('claude','codex','antigravity')
+        $tray = New-FakeTray
+        $now = Get-Date; $r5 = $now.AddHours(2); $rw = $now.AddDays(3)
+        Complete-AgentViewRefresh $tray @((New-IntRow 'claude' 30 20 $r5 $rw), (New-IntRow 'codex' 10 5 $r5 $rw)) -Now $now
+        $tray.Notify.Balloons.Count | Should Be 1
+        $tray.Notify.Balloons[0].Title | Should Be 'Added Antigravity'
+        $tray.Notify.Balloons[0].Text | Should Be 'Hide it in Settings'
+        @($ws.HiddenProviders).Count | Should Be 0
+        (Get-AgentViewSettings (Join-Path $env:LOCALAPPDATA 'agent-view/settings.json')).KnownProviders -join ',' | Should Be 'claude,codex,antigravity'
+        Complete-AgentViewRefresh $tray @((New-IntRow 'claude' 30 20 $r5 $rw), (New-IntRow 'codex' 10 5 $r5 $rw), (New-AgRow 'gemini' 40 $r5)) -Now $now.AddMinutes(1)
+        $tray.Notify.Balloons.Count | Should Be 1
+        @($tray.State.View | ForEach-Object Provider) -join ',' | Should Be 'claude,codex,antigravity-gemini'
+    }
+    $env:LOCALAPPDATA = $savedLocal
+    [AppDomain]::CurrentDomain.SetData('agent-view.language', $savedLanguage)
+    [AppDomain]::CurrentDomain.SetData('agent-view.ProviderPresence', $savedPresence)
+}

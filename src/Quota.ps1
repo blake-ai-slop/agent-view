@@ -15,6 +15,16 @@ Register-AgentViewStrings -Module 'quota' -Strings @{
 # Dot-source không có side effect: chỉ định nghĩa hàm. Dữ liệu thô có accountUuid/email/gói: chỉ giữ % + giờ reset,
 # không log, không ghi file. Không đọc credentials, không gọi lượt model.
 . (Join-Path $PSScriptRoot 'Process.ps1')
+. (Join-Path $PSScriptRoot 'Providers.ps1')
+# Module quota riêng của provider (vd QuotaAntigravity.ps1) nạp cùng Quota.ps1 nếu file có: runspace refresh chỉ nạp Quota.ps1.
+# Cờ chặn vòng lặp nếu module tự dot-source lại Quota.ps1.
+if (-not $__avQuotaModulesLoading) {
+  $__avQuotaModulesLoading = $true
+  foreach ($__avModule in @(Get-AgentProviders | Where-Object { $_.Module } | ForEach-Object { Join-Path $PSScriptRoot $_.Module })) {
+    if (Test-Path -LiteralPath $__avModule) { . $__avModule }
+  }
+  Remove-Variable __avQuotaModulesLoading, __avModule -ErrorAction SilentlyContinue
+}
 
 # ---------- hàm thuần ----------
 
@@ -251,9 +261,16 @@ function Get-QuotaHomeDir { [Environment]::GetFolderPath('UserProfile') }
 # Thư mục làm việc rỗng, cố định, riêng user (Claude tạo thư mục trong ~/.claude/projects cho mỗi cwd).
 function Get-QuotaCwd { Join-Path (Get-QuotaHomeDir) '.agent-view\limits-cwd' }
 
+# PATH trước, sau đó KnownPaths của provider có Cli khớp (chỉ Test-Path, không chạy tiến trình).
 function Find-AgentCli([string]$Name) {
   $c = Get-Command $Name -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($c) { return $c.Source }
+  foreach ($p in @(Get-AgentProviders | Where-Object { $_.Cli -eq $Name })) {
+    foreach ($known in @($p.KnownPaths)) {
+      $path = [Environment]::ExpandEnvironmentVariables([string]$known)
+      if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) { return $path }
+    }
+  }
   return $null
 }
 
@@ -304,6 +321,8 @@ function New-QuotaOps {
   return @{
     FallbackState = Get-ClaudeFallbackState
     CodexState    = Get-CodexState
+    AntigravityState = Get-QuotaDomainState 'agent-view.AntigravityState'
+    ProviderPresence = Get-QuotaDomainState 'agent-view.ProviderPresence'
     Now      = { Get-Date }
     GetEnv   = { param($name) [Environment]::GetEnvironmentVariable($name) }
     HomeDir  = { Get-QuotaHomeDir }
@@ -420,14 +439,34 @@ function Get-CodexQuota([hashtable]$Ops, [switch]$Manual) {
   catch { return New-AgentQuota 'codex' $name $null (T 'quota.cannot_read_quota') (Get-Date) }
 }
 
-# Quota của mọi provider, thứ tự cố định claude, codex: phát 2 object ra pipeline, không ném lỗi.
-# Ok khi có ít nhất một cửa sổ; số và reset của cửa sổ thiếu là $null. Tên trường luôn giữ nguyên.
-# -Ops: hashtable ghi đè một phần các thao tác ngoài (Now, GetEnv, HomeDir, ReadText, Find, Run, FallbackState, CodexState).
-# -Manual: người dùng bấm refresh/thử lại ⇒ chỉ nới throttle Codex (≥30 s); quy tắc 5 phút của Claude giữ nguyên.
+# Quota của mọi provider đã phát hiện, theo thứ tự registry: phát từng row ra pipeline (caller bọc @()), không ném lỗi.
+# Ok khi có ít nhất một cửa sổ; số và reset của cửa sổ thiếu là $null. Row luôn có Family/Group (thiếu ⇒ Family = Provider, Group = $null).
+# -Ops: hashtable ghi đè một phần các thao tác ngoài (Now, GetEnv, HomeDir, ReadText, Find, Run, FallbackState, CodexState,
+#   AntigravityState, ProviderPresence).
+# -Manual: người dùng bấm refresh/thử lại ⇒ quét lại provider + nới throttle (Codex ≥30 s); quy tắc 5 phút của Claude giữ nguyên.
+# -Skip: Family không đọc (vd provider người dùng ẩn). Hàm Fetch chưa có (module thiếu) ⇒ bỏ qua im lặng.
+# Không phát hiện provider nào ⇒ không phát row nào (UI hỏi Get-AgentDetectedProviders để biết lý do).
 function Get-AgentQuotas {
-  param([hashtable]$Ops, [switch]$Manual)
+  param([hashtable]$Ops, [switch]$Manual, [string[]]$Skip)
   $all = New-QuotaOps
   if ($Ops) { foreach ($k in @($Ops.Keys)) { $all[$k] = $Ops[$k] } }
-  Get-ClaudeQuota $all
-  Get-CodexQuota $all -Manual:$Manual
+  $detected = @(Get-AgentDetectedProviders -Ops $all -Rescan:$Manual)
+  foreach ($p in Get-AgentProviders) {
+    if ($detected -notcontains $p.Family -or @($Skip) -contains $p.Family) { continue }
+    $cmd = Get-Command $p.Fetch -CommandType Function -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cmd) { continue }
+    $rows = $null
+    try {
+      if ($cmd.Parameters.ContainsKey('Manual')) { $rows = & $cmd -Ops $all -Manual:$Manual }
+      else { $rows = & $cmd -Ops $all }
+    } catch { continue }
+    foreach ($r in @($rows)) {
+      if ($null -eq $r) { continue }
+      if (-not $r.PSObject.Properties['Family']) {
+        Add-Member -InputObject $r -NotePropertyName Family -NotePropertyValue $r.Provider
+        Add-Member -InputObject $r -NotePropertyName Group -NotePropertyValue $null
+      }
+      $r
+    }
+  }
 }

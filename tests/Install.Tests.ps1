@@ -64,12 +64,68 @@ Describe 'Install options' {
         ConvertFrom-AgentViewYesNo 'không' $true | Should Be $false
         ($null -eq (ConvertFrom-AgentViewYesNo 'maybe' $true)) | Should Be $true
     }
+    It 'does not ask when -Providers or AGENT_VIEW_PROVIDERS is given' {
+        (Resolve-AgentViewInstallOptions @{ Providers='codex' } @{} $true $none).Ask | Should Be $false
+        (Resolve-AgentViewInstallOptions @{} @{ AGENT_VIEW_PROVIDERS='claude' } $true $none).Ask | Should Be $false
+        (Resolve-AgentViewInstallOptions @{ Providers='' } @{ AGENT_VIEW_PROVIDERS=' ' } $true $none).Ask | Should Be $true
+    }
+}
+
+Describe 'Install provider choice' {
+    $families = @(Get-AgentProviders | ForEach-Object { $_.Family })
+    $fresh = [pscustomobject]@{ HiddenProviders=@(); KnownProviders=@() }
+    function Resolve-Choice($Explicit, $Existing, $Detected) { Set-AgentViewProviderHidden (Resolve-AgentViewProviderChoice $Explicit $Existing $Detected $families) $Existing $families }
+    It 'parses comma-separated ids in registry order, Enter = default, unknown ids reported' {
+        $a = ConvertFrom-AgentViewProviderAnswer '' $families @('claude')
+        ($a.Selected -join ',') | Should Be 'claude'; $a.Unknown.Count | Should Be 0
+        $a = ConvertFrom-AgentViewProviderAnswer ' Antigravity , claude,,' $families @('claude')
+        ($a.Selected -join ',') | Should Be 'claude,antigravity'; $a.Unknown.Count | Should Be 0
+        $a = ConvertFrom-AgentViewProviderAnswer 'codex, gemini' $families @()
+        ($a.Unknown -join ',') | Should Be 'gemini'
+    }
+    It 'fresh install: asks, defaults to detected, hides the rest and records detected' {
+        $c = Resolve-Choice '' $fresh @('claude','codex')
+        $c.Ask | Should Be $true; $c.Write | Should Be $true
+        ($c.Selected -join ',') | Should Be 'claude,codex'
+        ($c.Hidden -join ',') | Should Be 'antigravity'
+        ($c.Known -join ',') | Should Be 'claude,codex'
+    }
+    It 'reinstall with KnownProviders keeps the choice without asking or writing' {
+        $c = Resolve-Choice '' ([pscustomobject]@{ HiddenProviders=@('codex'); KnownProviders=@('claude') }) @('claude','codex')
+        $c.Keep | Should Be $true; $c.Ask | Should Be $false; $c.Write | Should Be $false
+    }
+    It 'explicit list wins, even on reinstall' {
+        $c = Resolve-Choice 'codex' ([pscustomobject]@{ HiddenProviders=@(); KnownProviders=@('claude') }) @('claude')
+        $c.Ask | Should Be $false; $c.Write | Should Be $true
+        ($c.Hidden -join ',') | Should Be 'claude,antigravity'
+        ($c.Known -join ',') | Should Be 'claude'
+        (Resolve-Choice 'codex,bogus' $fresh @()).Unknown -join ',' | Should Be 'bogus'
+    }
+    It 'nothing detected or chosen never hides every provider' {
+        $c = Resolve-Choice '' $fresh @()
+        $c.Selected.Count | Should Be 0
+        $c.Hidden.Count | Should Be 0
+        $c.Known.Count | Should Be 0
+    }
+    It 'upgrade from v0.2 keeps providers the user had hidden and their group ids' {
+        $c = Resolve-Choice '' ([pscustomobject]@{ HiddenProviders=@('codex'); KnownProviders=@() }) @('claude','codex')
+        ($c.Selected -join ',') | Should Be 'claude'
+        ($c.Hidden -join ',') | Should Be 'codex,antigravity'
+        $c = Resolve-Choice 'antigravity,claude' ([pscustomobject]@{ HiddenProviders=@('antigravity-gemini','codex'); KnownProviders=@() }) @('antigravity')
+        ($c.Hidden -join ',') | Should Be 'codex,antigravity-gemini'
+    }
+    It 'has en and vi text for the no-agent warning' {
+        Set-AgentViewLanguage en
+        try { T 'installer.no_supported_agent_detected' | Should Match 'Claude Code, Codex, Antigravity' }
+        finally { Set-AgentViewLanguage vi }
+        T 'installer.no_supported_agent_detected' | Should Match '^Chưa phát hiện agent nào được hỗ trợ'
+    }
 }
 
 Describe 'Install payload and staging' {
     It 'includes all modules including Cli.ps1 and rejects missing local files' {
         $text=Get-Content "$PSScriptRoot/../installer.ps1" -Raw -Encoding UTF8
-        foreach ($name in @('I18n.ps1','Ui.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','SettingsWindow.ps1','History.ps1','Forecast.ps1','Update.ps1','Notify.ps1','Toast.ps1','Version.ps1','Cli.ps1')) { $text | Should Match ([regex]::Escape("'"+$name+"'")) }
+        foreach ($name in @('I18n.ps1','Ui.ps1','Providers.ps1','QuotaAntigravity.ps1','Theme.ps1','Format.ps1','Logos.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','SettingsWindow.ps1','History.ps1','Forecast.ps1','Update.ps1','Notify.ps1','Toast.ps1','Version.ps1','Cli.ps1')) { $text | Should Match ([regex]::Escape("'"+$name+"'")) }
         $text | Should Match 'Thiếu file cài đặt'
     }
     It 'picks the repo, a local source folder, or a URL' {
@@ -82,7 +138,9 @@ Describe 'Install payload and staging' {
     It 'stages the full repo payload and fails before touching the install dir when a file is missing' {
         $repo = Resolve-Path "$PSScriptRoot/.."
         $n = Save-AgentViewPayload ([pscustomobject]@{ Local=$true; Base=$repo }) "$TestDrive/stage"
-        $n | Should Be 21
+        $n | Should Be 24
+        Test-Path "$TestDrive/stage/Providers.ps1" | Should Be $true
+        Test-Path "$TestDrive/stage/QuotaAntigravity.ps1" | Should Be $true
         Test-Path "$TestDrive/stage/Ui.ps1" | Should Be $true
         Test-Path "$TestDrive/stage/Cli.ps1" | Should Be $true
         Test-Path "$TestDrive/stage/Version.ps1" | Should Be $true
@@ -96,7 +154,7 @@ Describe 'Install payload and staging' {
         [void](Save-AgentViewPayload ([pscustomobject]@{ Local=$true; Base=$repo }) "$TestDrive/st3")
         $paths = Get-AgentViewPaths "$TestDrive/inst" "$TestDrive/startup"
         $s=Get-AgentViewSettings $paths.Settings; $s.UpdateCheck=$false; Save-AgentViewSettings $s $paths.Settings
-        (Install-AgentViewFiles "$TestDrive/st3" $paths) | Should Be 21
+        (Install-AgentViewFiles "$TestDrive/st3" $paths) | Should Be 24
         (Get-AgentViewSettings $paths.Settings).UpdateCheck | Should Be $false
         Test-Path $paths.Launcher | Should Be $true
         Set-Content $paths.Entry 'OLD'

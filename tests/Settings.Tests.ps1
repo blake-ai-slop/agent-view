@@ -38,13 +38,14 @@ Describe 'Preferences schema' {
     }
     It 'uses safe defaults for missing or mistyped fields' {
         $p=Join-Path $TestDrive 'preferences.json'
-        Set-Content $p '{"RefreshSeconds":"60","NotifyEnabled":"false","NotifyReset":1,"NotifyThresholds":[10,30],"HiddenProviders":["claude","codex"]}'
+        Set-Content $p '{"RefreshSeconds":"60","NotifyEnabled":"false","NotifyReset":1,"NotifyThresholds":[10,30],"HiddenProviders":["claude","codex","antigravity"],"KnownProviders":"claude"}'
         $s=Get-AgentViewSettings $p
         $s.RefreshSeconds | Should Be 120
         $s.NotifyEnabled | Should Be $true
         $s.NotifyReset | Should Be $true
         ($s.NotifyThresholds -join ',') | Should Be '30,10'
         $s.HiddenProviders.Count | Should Be 0
+        $s.KnownProviders.Count | Should Be 0
     }
     It 'roundtrips preferences and preserves existing widget fields' {
         $p=Join-Path $TestDrive 'preferences.json'
@@ -72,11 +73,47 @@ Describe 'Preferences schema' {
     }
     It 'rejects invalid refresh and hidden-provider types' {
         $p=Join-Path $TestDrive 'invalid.json'
-        foreach ($json in @('"claude"','["other"]','[true]','["claude","other"]','["Claude"]')) {
+        foreach ($json in @('"claude"','["other"]','[true]','["claude","other"]','["Claude"]','["claude-"]','["other-gemini"]','["antigravity_gemini"]','["codex","claude","antigravity"]')) {
             Set-Content $p ('{"HiddenProviders":'+$json+',"RefreshSeconds":60.5}')
             $s=Get-AgentViewSettings $p
             $s.HiddenProviders.Count | Should Be 0
             $s.RefreshSeconds | Should Be 120
         }
+    }
+    It 'accepts registry families and family-group ids but never hides every family' {
+        $p=Join-Path $TestDrive 'providers.json'
+        Set-Content $p '{"HiddenProviders":["claude","codex"]}'
+        ((Get-AgentViewSettings $p).HiddenProviders -join ',') | Should Be 'claude,codex'
+        Set-Content $p '{"HiddenProviders":["antigravity-gemini","antigravity-3p","codex"]}'
+        ((Get-AgentViewSettings $p).HiddenProviders -join ',') | Should Be 'antigravity-gemini,antigravity-3p,codex'
+        Set-Content $p '{"HiddenProviders":["claude","codex","antigravity-gemini"]}'
+        ((Get-AgentViewSettings $p).HiddenProviders -join ',') | Should Be 'claude,codex,antigravity-gemini'
+    }
+    It 'reads KnownProviders as registry families only and roundtrips it' {
+        $p=Join-Path $TestDrive 'known.json'
+        (Get-AgentViewSettings $p).KnownProviders.Count | Should Be 0
+        foreach ($json in @('"claude"','["other"]','[1]','["claude","antigravity-gemini"]','["Claude"]')) {
+            Set-Content $p ('{"KnownProviders":'+$json+'}')
+            (Get-AgentViewSettings $p).KnownProviders.Count | Should Be 0
+        }
+        $s=Get-AgentViewSettings $p; $s.KnownProviders=@('claude','antigravity'); Save-AgentViewSettings $s $p
+        ((Get-AgentViewSettings $p).KnownProviders -join ',') | Should Be 'claude,antigravity'
+        $s=Get-AgentViewSettings $p; $s.KnownProviders=@('codex'); Save-AgentViewSettings $s $p
+        ((Get-AgentViewSettings $p).KnownProviders -join ',') | Should Be 'codex'
+    }
+    It 'reads a v0.2 settings file exactly as before' {
+        $p=Join-Path $TestDrive 'legacy.json'
+        Set-Content $p '{"WidgetEnabled":true,"WidgetEdge":"left","Language":"vi","RefreshSeconds":300,"HiddenProviders":["codex"],"UpdateCheck":false}'
+        $s=Get-AgentViewSettings $p
+        ($s.HiddenProviders -join ',') | Should Be 'codex'
+        $s.KnownProviders.Count | Should Be 0
+        $s.WidgetEnabled | Should Be $true; $s.WidgetEdge | Should Be left; $s.Language | Should Be vi; $s.RefreshSeconds | Should Be 300; $s.UpdateCheck | Should Be $false
+    }
+    It 'falls back to the legacy families when Providers.ps1 is not next to Settings.ps1' {
+        $dir=Join-Path $TestDrive 'lone'; New-Item -ItemType Directory -Force $dir | Out-Null
+        Copy-Item "$PSScriptRoot/../src/Settings.ps1" $dir
+        $p=Join-Path $TestDrive 'lone.json'; Set-Content $p '{"HiddenProviders":["codex"]}'
+        $out = powershell.exe -NoProfile -Command ". '$dir\Settings.ps1'; (Get-AgentViewSettings '$p').HiddenProviders -join ','; (Get-AgentViewSettingsFamilies) -join ','"
+        ($out -join '|') | Should Be 'codex|claude,codex'
     }
 }

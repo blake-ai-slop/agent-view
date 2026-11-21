@@ -19,7 +19,7 @@ function New-IexTestSandbox([string]$Name) {
 function Invoke-IexTestHost([string]$Exe, [string]$Arguments, $Box, [hashtable]$Extra = @{}) {
     $vars = @{
         LOCALAPPDATA=$Box.Local; AGENT_VIEW_STARTUP_DIR=$Box.Startup; AGENT_VIEW_USER_PATH_FILE=$Box.UserPath; TEMP=$Box.Temp; TMP=$Box.Temp
-        AGENT_VIEW_SOURCE=$null; AGENT_VIEW_YES=$null; AGENT_VIEW_NO_START=$null; AGENT_VIEW_NO_AUTOSTART=$null; AGENT_VIEW_WIDGET=$null; AGENT_VIEW_QUIET=$null
+        AGENT_VIEW_SOURCE=$null; AGENT_VIEW_YES=$null; AGENT_VIEW_NO_START=$null; AGENT_VIEW_NO_AUTOSTART=$null; AGENT_VIEW_WIDGET=$null; AGENT_VIEW_QUIET=$null; AGENT_VIEW_PROVIDERS=$null
         AGENT_VIEW_BOOTSTRAP=$null; AGENT_VIEW_INSTALL_SCRIPT=$null; AV_TEST_BOOTSTRAP=$bootstrap
     }
     foreach ($k in $Extra.Keys) { $vars[$k] = $Extra[$k] }
@@ -53,10 +53,10 @@ function New-IexTestRunner([string]$Mode) {
 function Assert-IexTestInstalled($Box, $Result) {
     $Result.Code | Should Be 0
     $root = Join-Path $Box.Local 'agent-view'
-    foreach ($name in @('I18n.ps1','Ui.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Process.ps1','Theme.ps1','Format.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','Version.ps1','Cli.ps1','uninstall.ps1','launch.vbs','bin\agentview.cmd')) {
+    foreach ($name in @('I18n.ps1','Ui.ps1','Tray.ps1','agent-view.ps1','Quota.ps1','Providers.ps1','QuotaAntigravity.ps1','Process.ps1','Theme.ps1','Format.ps1','Logos.ps1','Ring.ps1','Popup.ps1','Widget.ps1','Settings.ps1','Version.ps1','Cli.ps1','uninstall.ps1','launch.vbs','bin\agentview.cmd')) {
         Test-Path -LiteralPath (Join-Path $root $name) | Should Be $true
     }
-    @(Get-ChildItem -LiteralPath $root -Filter '*.ps1').Count | Should Be 21
+    @(Get-ChildItem -LiteralPath $root -Filter '*.ps1').Count | Should Be 24
     Test-Path -LiteralPath (Join-Path $Box.Startup 'agent-view.lnk') | Should Be $true
     [IO.File]::ReadAllText($Box.UserPath) | Should Be ('C:\keep;' + (Join-Path $root 'bin'))
     @(Get-ChildItem -LiteralPath $Box.Temp -Filter 'agent-view-*' -Force).Count | Should Be 0
@@ -129,5 +129,46 @@ Describe 'One-line install end to end' {
         (Get-AgentViewSettings $path).UpdateCheck | Should Be $false
         (Get-AgentViewSettings $path).WidgetEnabled | Should Be $true
         Test-Path (Join-Path $box.Local 'agent-view/Update.ps1') | Should Be $true
+    }
+    It 'forwards -Providers from the bootstrap to installer.ps1 and rejects a missing value' {
+        . "$PSScriptRoot/../src/Settings.ps1"
+        $box = New-IexTestSandbox ('provflag-' + [guid]::NewGuid().ToString('N'))
+        $r=Invoke-IexTestHost $winPs ('-NoProfile -ExecutionPolicy Bypass -File "' + $bootstrap + '" -Yes -NoStart -Providers codex,antigravity') $box
+        if ($r.Code -ne 0) { Write-Host $r.Output }
+        $r.Code | Should Be 0
+        ((Get-AgentViewSettings (Join-Path $box.Local 'agent-view/settings.json')).HiddenProviders -join ',') | Should Be 'claude'
+        $box2 = New-IexTestSandbox ('provbad-' + [guid]::NewGuid().ToString('N'))
+        $r=Invoke-IexTestHost $winPs ('-NoProfile -ExecutionPolicy Bypass -File "' + $bootstrap + '" -Providers') $box2 @{ AGENT_VIEW_SOURCE=$repo }
+        $r.Code | Should Be 2
+        $r.Output | Should Match '-Providers needs'
+        Test-Path -LiteralPath (Join-Path $box2.Local 'agent-view') | Should Be $false
+    }
+    It 'forwards -Providers given as an array to a script block' {
+        . "$PSScriptRoot/../src/Settings.ps1"
+        $box = New-IexTestSandbox ('provsb-' + [guid]::NewGuid().ToString('N'))
+        $runner = Join-Path $TestDrive 'runner-providers.ps1'
+        $code = '$text = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($env:AV_TEST_BOOTSTRAP)); $global:LASTEXITCODE = 99' + "`r`n" + '& ([scriptblock]::Create($text)) -Yes -NoStart -Providers claude,codex' + "`r`n" + 'exit $LASTEXITCODE' + "`r`n"
+        [IO.File]::WriteAllText($runner, $code, (New-Object Text.ASCIIEncoding))
+        $r=Invoke-IexTestHost $winPs ('-NoProfile -ExecutionPolicy Bypass -File "' + $runner + '"') $box @{ AGENT_VIEW_SOURCE=$repo }
+        if ($r.Code -ne 0) { Write-Host $r.Output }
+        $r.Code | Should Be 0
+        ((Get-AgentViewSettings (Join-Path $box.Local 'agent-view/settings.json')).HiddenProviders -join ',') | Should Be 'antigravity'
+    }
+    It 'applies AGENT_VIEW_PROVIDERS through the bootstrap and keeps the choice on reinstall' {
+        . "$PSScriptRoot/../src/Settings.ps1"
+        $box = New-IexTestSandbox ('prov-' + [guid]::NewGuid().ToString('N'))
+        $argsText='-NoProfile -ExecutionPolicy Bypass -File "' + $bootstrap + '" -Yes -NoStart'
+        $r=Invoke-IexTestHost $winPs $argsText $box @{ AGENT_VIEW_PROVIDERS='codex' }
+        if ($r.Code -ne 0) { Write-Host $r.Output }
+        $r.Code | Should Be 0
+        $path=Join-Path $box.Local 'agent-view/settings.json'
+        ((Get-AgentViewSettings $path).HiddenProviders -join ',') | Should Be 'claude,antigravity'
+        $s=Get-AgentViewSettings $path; $s.KnownProviders=@('codex'); Save-AgentViewSettings $s $path
+        $r=Invoke-IexTestHost $winPs $argsText $box
+        $r.Code | Should Be 0
+        ((Get-AgentViewSettings $path).HiddenProviders -join ',') | Should Be 'claude,antigravity'
+        $r=Invoke-IexTestHost $winPs $argsText $box @{ AGENT_VIEW_PROVIDERS='nope' }
+        $r.Code | Should Be 1
+        ((Get-AgentViewSettings $path).HiddenProviders -join ',') | Should Be 'claude,antigravity'
     }
 }
