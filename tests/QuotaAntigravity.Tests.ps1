@@ -38,6 +38,8 @@ Describe 'Antigravity quota' {
     $fake.Calls | Should Be 1
     $fake.Invocation.File | Should Be 'C:\fixture\agy.exe'
     ($fake.Invocation.ArgList -join ' ') | Should Be '-p /usage --output-format json'
+    @($fake.Invocation.Env.Keys).Count | Should Be 1
+    $fake.Invocation.Env['AGY_CLI_DISABLE_AUTO_UPDATE'] | Should BeExactly 'true'
     $fake.Send.Count | Should Be 0
     $fake.OnLine | Should BeNullOrEmpty
     $fake.TimeoutMs | Should Be 15000

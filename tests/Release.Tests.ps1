@@ -157,6 +157,20 @@ Describe 'Public release export' {
         Assert-MockCalled Invoke-ReleaseChecks -Times 1 -Exactly -Scope It
         { Publish-Release $source '0.1.0' $target '' } | Should Throw
     }
+    It 'accepts a target directly under the source .release folder and rejects other nested targets' {
+        $inside = Join-Path $source '.release/public'
+        $null = New-Item -ItemType Directory -Force -Path $inside
+        & git -C $inside init --quiet
+        & git -C $inside config user.name 'Release Tester'
+        & git -C $inside config user.email ('tester' + '@' + 'example.test')
+        $null = Publish-Release $source '0.1.0' $inside 'sample-owner'
+        (& git -C $inside tag --list) | Should Be 'v0.1.0'
+        Test-Path (Join-Path $inside '.release') | Should Be $false
+        foreach ($bad in @((Join-Path $source 'src/public'), (Join-Path $source '.release'), (Join-Path $source '.release/a/b'), $source, $caseRoot)) {
+            $null = New-Item -ItemType Directory -Force -Path $bad
+            { Publish-Release $source '0.1.0' $bad '' } | Should Throw 'Target must be separate from source'
+        }
+    }
     It 'does not commit when public verification fails' {
         Mock Invoke-ReleaseChecks { throw 'Verification failed' }
         { Publish-Release $source '0.1.0' $target '' } | Should Throw

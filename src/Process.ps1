@@ -73,6 +73,7 @@ function Start-AgentProcessNoBom([System.Diagnostics.ProcessStartInfo]$StartInfo
 }
 
 # Chạy CLI trong $Cwd, đọc stdout bằng UTF-8, không quá $TimeoutMs, kill cả cây nếu còn chạy khi xong.
+# $Invocation: @{ File; ArgList; Env (tùy chọn, tên→giá trị) }.
 # $OnLine (nếu có) nhận từng dòng, trả @{ Write = @(...); Done = $bool }. Stdin đóng ngay khi không có $OnLine.
 # Ra: @{ Started; TimedOut; Killed; ExitCode; Lines }. Không ném lỗi.
 function Invoke-AgentProcess {
@@ -102,6 +103,10 @@ function Invoke-AgentProcess {
     $psi.StandardErrorEncoding = $utf8
     foreach ($k in @($psi.EnvironmentVariables.Keys)) {
       if (Test-AgentInheritedEnvName $k) { $psi.EnvironmentVariables.Remove($k) }
+    }
+    # Invocation.Env (tùy chọn): biến môi trường thêm riêng cho tiến trình con này, đặt sau bước lọc.
+    if ($Invocation.Env -is [System.Collections.IDictionary]) {
+      foreach ($k in @($Invocation.Env.Keys)) { $psi.EnvironmentVariables["$k"] = "$($Invocation.Env[$k])" }
     }
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $p = Start-AgentProcessNoBom $psi

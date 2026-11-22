@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## v0.3.1
+
+### Fixed
+
+- **No more console window flashing.** When Antigravity was shown, a console window could briefly pop up and close every 15–20 minutes. It came from the Antigravity CLI starting its own background updater each time agent-view read the quota. Agent-view now asks `agy` to skip its update check (`AGY_CLI_DISABLE_AUTO_UPDATE=true`) for quota reads only; running `agy` yourself still updates it as usual.
+
 ## v0.3.0
 
 ### Added

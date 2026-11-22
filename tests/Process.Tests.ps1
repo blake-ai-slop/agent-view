@@ -68,6 +68,18 @@ Describe 'Invoke-AgentProcess' {
     $r.Lines -join '|' | Should Be 'CLAUDECODE=|CLAUDE_CODE_TESTVAR=|HC_TESTVAR=|AGENTVIEW_KEEP=yes'
   }
 
+  It 'Invocation.Env truyền biến cho tiến trình con; không có Env thì không có biến' {
+    Remove-Item Env:AGENTVIEW_ENV_TEST -ErrorAction SilentlyContinue
+    $cmd = "$env:SystemRoot\System32\cmd.exe"
+    $inv = @{ File = $cmd; ArgList = @('/d', '/c', 'echo', '[%AGENTVIEW_ENV_TEST%]'); Env = @{ AGENTVIEW_ENV_TEST = 'true' } }
+    $r = Invoke-AgentProcess -Invocation $inv -Cwd $cwd -TimeoutMs 30000
+    $r.ExitCode | Should Be 0
+    $r.Lines[0] | Should Be '[true]'
+    $inv.Remove('Env')
+    $r = Invoke-AgentProcess -Invocation $inv -Cwd $cwd -TimeoutMs 30000
+    $r.Lines[0] | Should Be '[%AGENTVIEW_ENV_TEST%]'
+  }
+
   It 'hội thoại qua stdin bằng OnLine; Done thì kill tiến trình còn chạy' {
     $onLine = { param($line) if ($line -eq 'hello') { @{ Write = @('ping'); Done = $false } } elseif ($line -eq 'got:ping') { @{ Write = @(); Done = $true } } }
     $clock = [Diagnostics.Stopwatch]::StartNew()

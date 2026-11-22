@@ -88,6 +88,8 @@ function Get-AntigravityQuota([hashtable]$Ops, [switch]$Manual) {
       $good = $entry.Good
       try {
         $inv = Get-AgentCliInvocation $src @('-p', '/usage', '--output-format', 'json')
+        # agy tự spawn tiến trình update tách console ⇒ chớp cửa sổ. Chỉ chữ 'true' tắt được ('1' không).
+        $inv.Env = @{ AGY_CLI_DISABLE_AUTO_UPDATE = 'true' }
         $result = & $Ops.Run $inv @() $null 15000
         $now = & $Ops.Now
         if ($result.TimedOut) { $errorKey = 'antigravity.timed_out' }
